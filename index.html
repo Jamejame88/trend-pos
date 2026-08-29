@@ -241,6 +241,7 @@
     <button class="tab-btn owner-only" data-tab="history">سجل المبيعات</button>
     <button class="tab-btn owner-only" data-tab="debts">الديون</button>
     <button class="tab-btn owner-only" data-tab="returns">المرتجعات</button>
+    <button class="tab-btn owner-only" data-tab="report">التقرير 🔒</button>
     <button class="tab-btn owner-only" data-tab="log">سجل العمليات</button>
   </nav>
 
@@ -367,6 +368,48 @@
             <tbody id="returns-list"></tbody>
           </table>
         </div>
+      </div>
+    </section>
+
+    <!-- ---------- التقرير المحمي بكلمة سر (صاحب المحل) ---------- -->
+    <section id="tab-report" class="tab-panel">
+      <div class="card" id="report-locked-card">
+        <h2>🔒 هاد التقرير محمي بكلمة سر منفصلة</h2>
+        <p style="font-size:13px; color:var(--muted);">أول مرة؟ اكتب أي كلمة سر جديدة وبتصير هي كلمة سر التقرير من هلق وطالع.</p>
+        <div class="field"><label>كلمة سر التقرير</label><input type="password" id="report-password-input"></div>
+        <button class="btn" id="report-unlock-btn">فتح التقرير</button>
+        <div class="error-text" id="report-password-error"></div>
+      </div>
+      <div id="report-content" style="display:none;">
+        <div class="card">
+          <h2>💰 قيمة المخزون والربح المتوقع (الفرع الحالي)</h2>
+          <div class="form-grid">
+            <div>عدد المنتجات: <strong id="report-product-count">0</strong></div>
+            <div>إجمالي الكمية: <strong id="report-total-qty">0</strong></div>
+            <div>قيمة الشراء الكلية: <strong id="report-cost-value">0</strong></div>
+            <div>قيمة البيع الكلية: <strong id="report-sell-value">0</strong></div>
+            <div>الربح المتوقع: <strong id="report-expected-profit">0</strong></div>
+          </div>
+        </div>
+        <div class="card">
+          <h2>🏆 أفضل 10 منتجات مبيعًا (كل الوقت)</h2>
+          <div style="overflow-x:auto;">
+            <table>
+              <thead><tr><th>المنتج</th><th>الكمية المباعة</th><th>إجمالي المبيعات</th></tr></thead>
+              <tbody id="report-top-products"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <h2>📂 المبيعات حسب التصنيف</h2>
+          <div style="overflow-x:auto;">
+            <table>
+              <thead><tr><th>التصنيف</th><th>الكمية</th><th>الإجمالي</th></tr></thead>
+              <tbody id="report-by-category"></tbody>
+            </table>
+          </div>
+        </div>
+        <button class="btn secondary" id="report-lock-btn">🔒 إغلاق التقرير</button>
       </div>
     </section>
 
@@ -509,6 +552,7 @@ async function refreshAll() {
     await loadSupplierReturnProductPicker();
     await loadReturns();
     await loadActivityLog();
+    if (reportUnlocked) await loadReportData();
   }
 }
 
@@ -945,6 +989,84 @@ async function loadReturns() {
       <td>${escapeHtml(r.note || '-')}</td>
     </tr>
   `).join('') || '<tr><td colspan="6">لا يوجد مرتجعات</td></tr>';
+}
+
+// ---------------- التقرير المحمي بكلمة سر (صاحب المحل) ----------------
+let reportUnlocked = false;
+
+$('#report-unlock-btn').addEventListener('click', async () => {
+  const entered = $('#report-password-input').value;
+  const errBox = $('#report-password-error');
+  errBox.textContent = '';
+  const { data, error } = await supabase.from('settings').select('*').eq('branch_id', activeBranchId).eq('key', 'report_password').maybeSingle();
+  if (error) { errBox.textContent = 'خطأ: ' + error.message; return; }
+
+  if (!data) {
+    if (!entered) { errBox.textContent = 'اكتب كلمة سر لتعيينها أول مرة'; return; }
+    const { error: insErr } = await supabase.from('settings').insert({ branch_id: activeBranchId, key: 'report_password', value: entered });
+    if (insErr) { errBox.textContent = 'خطأ: ' + insErr.message; return; }
+    alert('تم تعيين كلمة سر التقرير لأول مرة لهاد الفرع - احفظها منيح.');
+    await unlockReport();
+    return;
+  }
+  if (data.value !== entered) { errBox.textContent = 'كلمة السر غلط'; return; }
+  await unlockReport();
+});
+
+async function unlockReport() {
+  reportUnlocked = true;
+  $('#report-password-error').textContent = '';
+  $('#report-password-input').value = '';
+  $('#report-locked-card').style.display = 'none';
+  $('#report-content').style.display = 'block';
+  await loadReportData();
+}
+
+$('#report-lock-btn').addEventListener('click', () => {
+  reportUnlocked = false;
+  $('#report-content').style.display = 'none';
+  $('#report-locked-card').style.display = 'block';
+});
+
+async function loadReportData() {
+  const cost_value = productsCache.reduce((s, p) => s + Number(p.cost_price) * p.quantity, 0);
+  const sell_value = productsCache.reduce((s, p) => s + Number(p.sell_price) * p.quantity, 0);
+  const total_qty = productsCache.reduce((s, p) => s + p.quantity, 0);
+  $('#report-product-count').textContent = productsCache.length;
+  $('#report-total-qty').textContent = total_qty;
+  $('#report-cost-value').textContent = cost_value.toFixed(0);
+  $('#report-sell-value').textContent = sell_value.toFixed(0);
+  $('#report-expected-profit').textContent = (sell_value - cost_value).toFixed(0);
+
+  const { data: items, error } = await supabase
+    .from('sale_items')
+    .select('product_name, quantity, subtotal, products(category), sales!inner(branch_id, status)')
+    .eq('sales.branch_id', activeBranchId)
+    .eq('sales.status', 'completed');
+  if (error) { console.error(error); return; }
+
+  const byProduct = {};
+  const byCategory = {};
+  (items || []).forEach((it) => {
+    if (!byProduct[it.product_name]) byProduct[it.product_name] = { qty: 0, total: 0 };
+    byProduct[it.product_name].qty += it.quantity;
+    byProduct[it.product_name].total += Number(it.subtotal);
+
+    const cat = (it.products && it.products.category) || 'غير مصنف';
+    if (!byCategory[cat]) byCategory[cat] = { qty: 0, total: 0 };
+    byCategory[cat].qty += it.quantity;
+    byCategory[cat].total += Number(it.subtotal);
+  });
+
+  const topProducts = Object.entries(byProduct).sort((a, b) => b[1].qty - a[1].qty).slice(0, 10);
+  $('#report-top-products').innerHTML = topProducts.map(([name, v]) => `
+    <tr><td>${escapeHtml(name)}</td><td>${v.qty}</td><td>${v.total.toFixed(0)}</td></tr>
+  `).join('') || '<tr><td colspan="3">لا يوجد بيانات مبيعات بعد</td></tr>';
+
+  const categories = Object.entries(byCategory).sort((a, b) => b[1].total - a[1].total);
+  $('#report-by-category').innerHTML = categories.map(([cat, v]) => `
+    <tr><td>${escapeHtml(cat)}</td><td>${v.qty}</td><td>${v.total.toFixed(0)}</td></tr>
+  `).join('') || '<tr><td colspan="3">لا يوجد بيانات مبيعات بعد</td></tr>';
 }
 
 // ---------------- سجل العمليات (صاحب المحل) ----------------
