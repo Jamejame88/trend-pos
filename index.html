@@ -886,10 +886,18 @@ let editingProductId = null;
 
 function renderProductsAdmin() {
   if (currentProfile.role !== 'owner') return;
+  const allCategories = [...new Set(productsCache.map(p => (p.category || '').trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare('ar'));
   $('#admin-products-list').innerHTML = productsCache.map(p => `
     <tr>
       <td>${escapeHtml(p.name)}</td>
-      <td>${escapeHtml(p.category || '-')}</td>
+      <td>
+        <select class="inline-category-select" data-id="${p.id}" style="width:100%; min-width:110px;">
+          <option value="" ${!p.category ? 'selected' : ''}>-- بدون تصنيف --</option>
+          ${allCategories.map(c => `<option value="${escapeAttr(c)}" ${c === (p.category || '') ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}
+          <option value="__new__">+ تصنيف جديد...</option>
+        </select>
+      </td>
       <td>${Number(p.cost_price).toFixed(0)}</td>
       <td>${Number(p.sell_price).toFixed(0)}</td>
       <td>${p.quantity}</td>
@@ -901,6 +909,25 @@ function renderProductsAdmin() {
     </tr>
   `).join('') || '<tr><td colspan="6">لا يوجد منتجات</td></tr>';
 }
+
+$('#admin-products-list').addEventListener('change', async (e) => {
+  const sel = e.target.closest('.inline-category-select');
+  if (!sel) return;
+  const productId = sel.dataset.id;
+  const product = productsCache.find(p => p.id === productId);
+  let newCategory = sel.value;
+
+  if (newCategory === '__new__') {
+    const typed = prompt('اسم التصنيف الجديد:');
+    if (!typed || !typed.trim()) { renderProductsAdmin(); return; } // إلغاء - نرجع القائمة متل ما كانت
+    newCategory = typed.trim();
+  }
+
+  const { error } = await supabase.from('products').update({ category: newCategory || null }).eq('id', productId);
+  if (error) { alert('خطأ بتحديث التصنيف: ' + error.message); renderProductsAdmin(); return; }
+  if (product) product.category = newCategory || null;
+  await loadProducts();
+});
 
 $('#admin-products-list').addEventListener('click', async (e) => {
   const editBtn = e.target.closest('.edit-product');
