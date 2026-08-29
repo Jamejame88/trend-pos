@@ -201,6 +201,40 @@
     max-width: 420px;
   }
   #scanner-view { width: 100%; border-radius: 8px; overflow: hidden; }
+
+  /* ---------- طباعة الفاتورة ---------- */
+  #receipt-print-area { display: none; }
+  .receipt {
+    width: 280px;
+    margin: 0 auto;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 12px;
+    color: #000;
+    background: #fff;
+  }
+  .receipt-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .receipt-header-text { flex: 1; text-align: center; }
+  .receipt h2 { text-align: center; margin: 0; font-size: 18px; letter-spacing: 2px; }
+  .receipt .receipt-subtitle { text-align: center; font-size: 12px; margin: 2px 0 0; }
+  .receipt-header-qr { flex-shrink: 0; text-align: center; }
+  .receipt-header-qr img { width: 62px; height: 62px; }
+  .receipt-qr-caption { text-align: center; font-size: 8px; margin-top: 2px; width: 62px; line-height: 1.2; }
+  .receipt .receipt-meta { font-size: 11px; margin: 8px 0 6px; line-height: 1.6; }
+  .receipt hr { border: none; border-top: 1px dashed #000; margin: 6px 0; }
+  .receipt table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .receipt th, .receipt td { padding: 2px 0; text-align: right; }
+  .receipt-totals div { display: flex; justify-content: space-between; margin: 2px 0; }
+  .receipt-footer { text-align: center; margin-top: 10px; font-size: 12px; }
+  @media print {
+    body * { visibility: hidden; }
+    #receipt-print-area, #receipt-print-area * { visibility: visible; }
+    #receipt-print-area {
+      display: block;
+      position: absolute;
+      top: 0; right: 0; left: 0;
+      width: 100%;
+    }
+  }
 </style>
 </head>
 <body>
@@ -257,6 +291,11 @@
             <span>الخصم</span>
             <input type="number" id="discount-input" value="0" min="0">
           </div>
+          <div class="input-with-scan" style="margin-top:4px;">
+            <input type="text" id="coupon-code-input" placeholder="كود خصم من عجلة الحظ (اختياري)">
+            <button type="button" class="btn secondary tiny" id="coupon-check-btn">تحقق وتفعيل</button>
+          </div>
+          <div id="coupon-status" style="font-size:12px; margin-bottom:8px;"></div>
           <div class="totals-row big"><span>الإجمالي</span><span id="total-display">0</span></div>
           <div class="totals-row">
             <span>المدفوع</span>
@@ -472,6 +511,9 @@
     </section>
   </main>
 </div>
+
+<!-- ==================== منطقة طباعة الفاتورة (مخفية، تظهر بس وقت الطباعة) ==================== -->
+<div id="receipt-print-area"></div>
 
 <!-- ==================== نافذة ماسح الباركود ==================== -->
 <div id="scanner-modal" class="scanner-modal">
@@ -712,6 +754,37 @@ function updateTotals() {
 $('#discount-input').addEventListener('input', updateTotals);
 $('#paid-input').addEventListener('input', updateTotals);
 
+// ---------------- كود خصم من عجلة الحظ (موقع الزبائن) ----------------
+$('#coupon-check-btn').addEventListener('click', async () => {
+  const code = $('#coupon-code-input').value.trim();
+  const statusEl = $('#coupon-status');
+  if (!code) { statusEl.textContent = ''; return; }
+
+  statusEl.textContent = '⏳ عم يتحقق من الكود...';
+  $('#coupon-check-btn').disabled = true;
+  try {
+    const { data, error } = await supabase.functions.invoke('redeem-coupon', { body: { code } });
+
+    if (error) {
+      statusEl.textContent = '❌ خطأ بالاتصال: ' + error.message;
+      return;
+    }
+    if (!data || !data.ok) {
+      statusEl.innerHTML = `❌ ${escapeHtml((data && data.message) || 'الكود غير صالح')}`;
+      return;
+    }
+
+    statusEl.innerHTML = `✅ الكود صالح! الجائزة: <b>${escapeHtml(data.prize || '')}</b>` +
+      (data.name ? ' - باسم ' + escapeHtml(data.name) : '') +
+      '<br>طبّق قيمة الخصم المناسبة يدويًا بخانة "الخصم" فوق.';
+    $('#coupon-code-input').value = '';
+  } catch (err) {
+    statusEl.textContent = '❌ خطأ: ' + err.message;
+  } finally {
+    $('#coupon-check-btn').disabled = false;
+  }
+});
+
 $('#checkout-btn').addEventListener('click', async () => {
   if (!cart.length) { alert('السلة فاضية'); return; }
   const subtotal = cart.reduce((s, i) => s + i.subtotal, 0);
@@ -758,6 +831,25 @@ $('#checkout-btn').addEventListener('click', async () => {
   }
 
   alert(`تمت عملية البيع بنجاح ✅\nالإجمالي: ${total.toFixed(0)}\nالباقي: ${change.toFixed(0)}`);
+
+  if (confirm('🖨 بدك تطبع الفاتورة؟')) {
+    const branchName = (branches.find(b => b.id === activeBranchId) || {}).name || '';
+    const cashierName = currentProfile.full_name || currentProfile.username || '';
+    printReceiptHtml(buildReceiptHtml({
+      branchName,
+      date: new Date().toLocaleString('ar'),
+      cashierName,
+      items: cart.map(i => ({ product_name: i.name, quantity: i.qty, unit_price: i.price, subtotal: i.subtotal })),
+      subtotal,
+      discount,
+      total,
+      paid,
+      change,
+      saleIdShort: saleId ? String(saleId).slice(0, 8) : '',
+      customerName: customerName ? customerName.trim() : '',
+    }));
+  }
+
   cart = [];
   $('#discount-input').value = 0;
   $('#paid-input').value = 0;
@@ -858,12 +950,17 @@ async function loadSalesHistory() {
       <td>${Number(s.total).toFixed(0)}</td>
       <td>${Number(s.paid).toFixed(0)}</td>
       <td>${s.status === 'cancelled' ? 'ملغاة ❌' : 'مكتملة'}</td>
-      <td>${s.status !== 'cancelled' ? `<button class="btn tiny danger cancel-sale" data-id="${s.id}">إلغاء</button>` : '-'}</td>
+      <td>
+        ${s.status !== 'cancelled' ? `<button class="btn tiny danger cancel-sale" data-id="${s.id}">إلغاء</button>` : ''}
+        <button class="btn tiny secondary print-sale" data-id="${s.id}">🖨 طباعة</button>
+      </td>
     </tr>
   `).join('') || '<tr><td colspan="5">لا يوجد فواتير</td></tr>';
 }
 
 $('#sales-history-list').addEventListener('click', async (e) => {
+  const printBtn = e.target.closest('.print-sale');
+  if (printBtn) { await printSaleById(printBtn.dataset.id); return; }
   const btn = e.target.closest('.cancel-sale');
   if (!btn) return;
   if (!confirm('متأكد تريد إلغاء هاي الفاتورة؟ رح ترجع الكمية للمخزون تلقائيًا، ولا يمكن التراجع.')) return;
@@ -1410,6 +1507,98 @@ $('#invoice-commit-btn').addEventListener('click', async () => {
     $('#invoice-commit-btn').disabled = false;
   }
 });
+
+// ---------------- طباعة الفاتورة ----------------
+const SHOP_NAME = 'TREND';
+const SHOP_SUBTITLE = 'بيوتي غاليري';
+// كود QR يوصل لصفحة منتجات المحل - مخزّن كصورة مضمّنة (بدون إنترنت) عشان يشتغل بأي وقت
+const RECEIPT_QR_DATA_URL = 'data:image/png;base64,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';
+
+function buildReceiptHtml({ branchName, date, cashierName, items, subtotal, discount, total, paid, change, saleIdShort, customerName }) {
+  const rowsHtml = (items || []).map(it => `
+    <tr>
+      <td>${escapeHtml(it.product_name)}</td>
+      <td>${it.quantity}</td>
+      <td>${Number(it.unit_price).toFixed(0)}</td>
+      <td>${Number(it.subtotal).toFixed(0)}</td>
+    </tr>
+  `).join('');
+
+  return `
+    <div class="receipt">
+      <div class="receipt-header">
+        <div class="receipt-header-text">
+          <h2>${escapeHtml(SHOP_NAME)}</h2>
+          <div class="receipt-subtitle">${escapeHtml(SHOP_SUBTITLE)}</div>
+        </div>
+        <div class="receipt-header-qr">
+          <img src="${RECEIPT_QR_DATA_URL}" alt="QR">
+          <div class="receipt-qr-caption">امسح وتصفّح منتجاتنا</div>
+        </div>
+      </div>
+      <div class="receipt-meta">
+        ${branchName ? `الفرع: ${escapeHtml(branchName)}<br>` : ''}
+        التاريخ: ${escapeHtml(date)}<br>
+        ${cashierName ? `الكاشير: ${escapeHtml(cashierName)}<br>` : ''}
+        ${saleIdShort ? `رقم الفاتورة: ${escapeHtml(saleIdShort)}<br>` : ''}
+        ${customerName ? `الزبون: ${escapeHtml(customerName)}<br>` : ''}
+      </div>
+      <hr>
+      <table>
+        <thead><tr><th>الصنف</th><th>كمية</th><th>سعر</th><th>مجموع</th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+      <hr>
+      <div class="receipt-totals">
+        <div><span>المجموع الفرعي</span><span>${Number(subtotal).toFixed(0)}</span></div>
+        ${discount ? `<div><span>الخصم</span><span>${Number(discount).toFixed(0)}</span></div>` : ''}
+        <div><b><span>الإجمالي</span><span>${Number(total).toFixed(0)}</span></b></div>
+        <div><span>المدفوع</span><span>${Number(paid).toFixed(0)}</span></div>
+        <div><span>الباقي</span><span>${Number(change).toFixed(0)}</span></div>
+      </div>
+      <p class="receipt-footer">شكرًا لزيارتكم 🌸</p>
+    </div>
+  `;
+}
+
+function printReceiptHtml(html) {
+  $('#receipt-print-area').innerHTML = html;
+  window.print();
+}
+
+async function printSaleById(saleId) {
+  const { data: sale, error: saleErr } = await supabase.from('sales').select('*').eq('id', saleId).single();
+  if (saleErr || !sale) { alert('تعذر تحميل بيانات الفاتورة: ' + (saleErr ? saleErr.message : '')); return; }
+
+  const { data: items, error: itemsErr } = await supabase.from('sale_items').select('*').eq('sale_id', saleId);
+  if (itemsErr) { alert('تعذر تحميل أصناف الفاتورة: ' + itemsErr.message); return; }
+
+  let cashierName = '';
+  if (sale.sold_by) {
+    const { data: p } = await supabase.from('profiles').select('username, full_name').eq('id', sale.sold_by).maybeSingle();
+    if (p) cashierName = p.full_name || p.username || '';
+  }
+
+  const branchName = (branches.find(b => b.id === sale.branch_id) || {}).name || '';
+
+  printReceiptHtml(buildReceiptHtml({
+    branchName,
+    date: new Date(sale.sale_date).toLocaleString('ar'),
+    cashierName,
+    items: (items || []).map(it => ({
+      product_name: it.product_name,
+      quantity: it.quantity,
+      unit_price: it.unit_price,
+      subtotal: it.subtotal,
+    })),
+    subtotal: sale.subtotal,
+    discount: sale.discount,
+    total: sale.total,
+    paid: sale.paid,
+    change: sale.change_due,
+    saleIdShort: String(sale.id).slice(0, 8),
+  }));
+}
 
 function escapeHtml(str) {
   const div = document.createElement('div');
