@@ -219,6 +219,7 @@
     <button class="tab-btn active" data-tab="pos">نقطة البيع</button>
     <button class="tab-btn owner-only" data-tab="products">المنتجات</button>
     <button class="tab-btn owner-only" data-tab="history">سجل المبيعات</button>
+    <button class="tab-btn owner-only" data-tab="debts">الديون</button>
     <button class="tab-btn owner-only" data-tab="log">سجل العمليات</button>
   </nav>
 
@@ -287,6 +288,19 @@
           <table>
             <thead><tr><th>التاريخ</th><th>الإجمالي</th><th>المدفوع</th><th>الحالة</th><th></th></tr></thead>
             <tbody id="sales-history-list"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- الديون (صاحب المحل) ---------- -->
+    <section id="tab-debts" class="tab-panel">
+      <div class="card">
+        <h2>الديون (الفرع الحالي)</h2>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead><tr><th>الزبون</th><th>الهاتف</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th><th>الحالة</th><th></th></tr></thead>
+            <tbody id="debts-list"></tbody>
           </table>
         </div>
       </div>
@@ -416,6 +430,7 @@ async function refreshAll() {
   await loadProducts();
   if (currentProfile.role === 'owner') {
     await loadSalesHistory();
+    await loadDebts();
     await loadActivityLog();
   }
 }
@@ -509,9 +524,11 @@ $('#checkout-btn').addEventListener('click', async () => {
   const paid = parseFloat($('#paid-input').value || 0);
   const change = Math.max(paid - total, 0);
 
+  let customerName = null, customerPhone = null;
   if (paid < total) {
-    const ok = confirm('المبلغ المدفوع أقل من الإجمالي.\nملاحظة: هاي أول نسخة ويب من البرنامج، وتسجيل "دين" رسمي لسا ما انضاف - رح تنسجل الفاتورة بس بالمبلغ المدفوع الفعلي. متابعة؟');
-    if (!ok) return;
+    customerName = prompt('المبلغ المدفوع أقل من الإجمالي - هيك رح ينسجل "دين" على الزبون.\nاكتب اسم الزبون:');
+    if (!customerName || !customerName.trim()) { alert('لازم اسم الزبون عشان نسجل الدين - العملية اتلغت.'); return; }
+    customerPhone = prompt('رقم هاتف الزبون (اختياري):') || null;
   }
 
   const { data: saleId, error } = await supabase.rpc('create_sale_tx', {
@@ -530,13 +547,27 @@ $('#checkout-btn').addEventListener('click', async () => {
     return;
   }
 
+  if (paid < total) {
+    const remaining = total - paid;
+    const { error: debtErr } = await supabase.from('debts').insert({
+      branch_id: activeBranchId,
+      sale_id: saleId,
+      customer_name: customerName.trim(),
+      customer_phone: customerPhone ? customerPhone.trim() : null,
+      total_amount: remaining,
+      paid_amount: 0,
+      status: 'open',
+    });
+    if (debtErr) alert('تمت عملية البيع، لكن صار خطأ بتسجيل الدين: ' + debtErr.message);
+  }
+
   alert(`تمت عملية البيع بنجاح ✅\nالإجمالي: ${total.toFixed(0)}\nالباقي: ${change.toFixed(0)}`);
   cart = [];
   $('#discount-input').value = 0;
   $('#paid-input').value = 0;
   renderCart();
   await loadProducts();
-  if (currentProfile.role === 'owner') await loadSalesHistory();
+  if (currentProfile.role === 'owner') { await loadSalesHistory(); await loadDebts(); }
 });
 
 // ---------------- إدارة المنتجات (صاحب المحل) ----------------
@@ -639,6 +670,69 @@ $('#sales-history-list').addEventListener('click', async (e) => {
   if (error) { alert('خطأ: ' + error.message); return; }
   await loadSalesHistory();
   await loadProducts();
+  await loadActivityLog();
+});
+
+// ---------------- الديون (صاحب المحل) ----------------
+let debtsCache = [];
+
+async function loadDebts() {
+  const { data, error } = await supabase
+    .from('debts')
+    .select('*')
+    .eq('branch_id', activeBranchId)
+    .order('status', { ascending: true })
+    .order('created_at', { ascending: false });
+  if (error) { console.error(error); return; }
+  debtsCache = data || [];
+  renderDebts();
+}
+
+function renderDebts() {
+  $('#debts-list').innerHTML = debtsCache.map(d => {
+    const remaining = Number(d.total_amount) - Number(d.paid_amount);
+    return `
+    <tr>
+      <td>${escapeHtml(d.customer_name)}</td>
+      <td>${escapeHtml(d.customer_phone || '-')}</td>
+      <td>${Number(d.total_amount).toFixed(0)}</td>
+      <td>${Number(d.paid_amount).toFixed(0)}</td>
+      <td>${remaining.toFixed(0)}</td>
+      <td>${d.status === 'paid' ? 'مسدد ✅' : 'مفتوح'}</td>
+      <td>${d.status !== 'paid' ? `<button class="btn tiny add-debt-payment" data-id="${d.id}">تسجيل دفعة</button>` : '-'}</td>
+    </tr>
+  `;
+  }).join('') || '<tr><td colspan="7">لا يوجد ديون مسجّلة</td></tr>';
+}
+
+$('#debts-list').addEventListener('click', async (e) => {
+  const btn = e.target.closest('.add-debt-payment');
+  if (!btn) return;
+  const debt = debtsCache.find(d => d.id === btn.dataset.id);
+  if (!debt) return;
+  const remaining = Number(debt.total_amount) - Number(debt.paid_amount);
+  const input = prompt(`المتبقي على ${debt.customer_name}: ${remaining.toFixed(0)}\nاكتب المبلغ المدفوع الآن:`);
+  if (!input) return;
+  const amount = parseFloat(input);
+  if (!amount || amount <= 0) { alert('مبلغ غير صحيح'); return; }
+
+  const { error: payErr } = await supabase.from('debt_payments').insert({ debt_id: debt.id, amount });
+  if (payErr) { alert('خطأ: ' + payErr.message); return; }
+
+  const newPaid = Number(debt.paid_amount) + amount;
+  const newStatus = newPaid >= Number(debt.total_amount) ? 'paid' : 'open';
+  const { error: updErr } = await supabase.from('debts').update({ paid_amount: newPaid, status: newStatus }).eq('id', debt.id);
+  if (updErr) { alert('خطأ: ' + updErr.message); return; }
+
+  await supabase.from('activity_log').insert({
+    branch_id: activeBranchId,
+    action_type: 'debt_payment',
+    description: `دفعة دين من ${debt.customer_name}`,
+    amount,
+    performed_by: currentProfile.id,
+  });
+
+  await loadDebts();
   await loadActivityLog();
 });
 
