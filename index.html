@@ -623,6 +623,7 @@ function renderProductsAdmin() {
       <td>
         <button class="btn tiny edit-product" data-id="${p.id}">تعديل</button>
         <button class="btn tiny danger delete-product" data-id="${p.id}">حذف</button>
+        ${!p.barcode ? `<button class="btn tiny secondary scan-row-barcode" data-id="${p.id}">📷 باركود</button>` : ''}
       </td>
     </tr>
   `).join('') || '<tr><td colspan="6">لا يوجد منتجات</td></tr>';
@@ -631,6 +632,7 @@ function renderProductsAdmin() {
 $('#admin-products-list').addEventListener('click', async (e) => {
   const editBtn = e.target.closest('.edit-product');
   const delBtn = e.target.closest('.delete-product');
+  const scanRowBtn = e.target.closest('.scan-row-barcode');
   if (editBtn) {
     fillProductForm(productsCache.find(p => p.id === editBtn.dataset.id));
   }
@@ -639,6 +641,9 @@ $('#admin-products-list').addEventListener('click', async (e) => {
     const { error } = await supabase.from('products').delete().eq('id', delBtn.dataset.id);
     if (error) { alert('خطأ: ' + error.message); return; }
     await loadProducts();
+  }
+  if (scanRowBtn) {
+    openScanner('rowBarcode', scanRowBtn.dataset.id);
   }
 });
 
@@ -805,14 +810,16 @@ function actionLabel(t) {
 
 // ---------------- ماسح الباركود بكاميرا الجوال ----------------
 let html5QrCode = null;
-let scannerTarget = null; // 'search' أو 'barcode'
+let scannerTarget = null; // 'search' أو 'formBarcode' أو 'rowBarcode'
+let scannerRowProductId = null;
 
-function openScanner(target) {
+function openScanner(target, productId = null) {
   if (typeof Html5Qrcode === 'undefined') {
     alert('مكتبة الماسح ما تحمّلت (تأكد من الاتصال بالإنترنت) - جرب تحدّث الصفحة.');
     return;
   }
   scannerTarget = target;
+  scannerRowProductId = productId;
   $('#scanner-modal').style.display = 'flex';
   html5QrCode = new Html5Qrcode('scanner-view');
   html5QrCode.start(
@@ -826,12 +833,16 @@ function openScanner(target) {
   });
 }
 
-function onScanSuccess(text) {
+async function onScanSuccess(text) {
   if (scannerTarget === 'search') {
     $('#sale-search').value = text;
     renderProductsForSale();
-  } else if (scannerTarget === 'barcode') {
+  } else if (scannerTarget === 'formBarcode') {
     $('#product-barcode').value = text;
+  } else if (scannerTarget === 'rowBarcode' && scannerRowProductId) {
+    const { error } = await supabase.from('products').update({ barcode: text }).eq('id', scannerRowProductId);
+    if (error) { alert('خطأ بتسجيل الباركود: ' + error.message); }
+    else { await loadProducts(); }
   }
   closeScanner();
 }
@@ -846,7 +857,7 @@ function closeScanner() {
 }
 
 $('#scan-search-btn').addEventListener('click', () => openScanner('search'));
-$('#scan-barcode-btn').addEventListener('click', () => openScanner('barcode'));
+$('#scan-barcode-btn').addEventListener('click', () => openScanner('formBarcode'));
 $('#scanner-close-btn').addEventListener('click', closeScanner);
 
 function escapeHtml(str) {
