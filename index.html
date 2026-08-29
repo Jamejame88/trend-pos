@@ -240,6 +240,7 @@
     <button class="tab-btn owner-only" data-tab="products">المنتجات</button>
     <button class="tab-btn owner-only" data-tab="history">سجل المبيعات</button>
     <button class="tab-btn owner-only" data-tab="debts">الديون</button>
+    <button class="tab-btn owner-only" data-tab="returns">المرتجعات</button>
     <button class="tab-btn owner-only" data-tab="log">سجل العمليات</button>
   </nav>
 
@@ -329,6 +330,41 @@
           <table>
             <thead><tr><th>الزبون</th><th>الهاتف</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th><th>الحالة</th><th></th></tr></thead>
             <tbody id="debts-list"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- المرتجعات (صاحب المحل) ---------- -->
+    <section id="tab-returns" class="tab-panel">
+      <div class="card">
+        <h2>↩ مرتجع من زبون</h2>
+        <div class="field">
+          <label>اختر الفاتورة (آخر 50 فاتورة مكتملة)</label>
+          <select id="return-sale-picker"><option value="">-- اختر فاتورة --</option></select>
+        </div>
+        <div id="return-sale-items"></div>
+      </div>
+
+      <div class="card">
+        <h2>↩ مرتجع للمورد</h2>
+        <div class="form-grid">
+          <div class="field">
+            <label>المنتج</label>
+            <select id="supplier-return-product"><option value="">-- اختر منتج --</option></select>
+          </div>
+          <div class="field"><label>الكمية</label><input type="number" id="supplier-return-qty" value="1" min="1"></div>
+          <div class="field"><label>ملاحظة (اختياري)</label><input type="text" id="supplier-return-note"></div>
+        </div>
+        <button class="btn" id="supplier-return-btn">↩ تنفيذ المرتجع للمورد</button>
+      </div>
+
+      <div class="card">
+        <h2>سجل المرتجعات (الفرع الحالي)</h2>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead><tr><th>التاريخ</th><th>النوع</th><th>المنتج</th><th>الكمية</th><th>السعر</th><th>ملاحظة</th></tr></thead>
+            <tbody id="returns-list"></tbody>
           </table>
         </div>
       </div>
@@ -469,6 +505,9 @@ async function refreshAll() {
   if (currentProfile.role === 'owner') {
     await loadSalesHistory();
     await loadDebts();
+    await loadReturnSalePicker();
+    await loadSupplierReturnProductPicker();
+    await loadReturns();
     await loadActivityLog();
   }
 }
@@ -479,6 +518,7 @@ async function loadProducts() {
   productsCache = data || [];
   renderProductsForSale();
   renderProductsAdmin();
+  if (currentProfile && currentProfile.role === 'owner') await loadSupplierReturnProductPicker();
 }
 
 // ---------------- نقطة البيع ----------------
@@ -779,6 +819,134 @@ $('#debts-list').addEventListener('click', async (e) => {
   await loadActivityLog();
 });
 
+// ---------------- المرتجعات (صاحب المحل) ----------------
+async function loadReturnSalePicker() {
+  const { data, error } = await supabase
+    .from('sales')
+    .select('id, sale_date, total')
+    .eq('branch_id', activeBranchId)
+    .eq('status', 'completed')
+    .order('sale_date', { ascending: false })
+    .limit(50);
+  if (error) { console.error(error); return; }
+  $('#return-sale-picker').innerHTML = '<option value="">-- اختر فاتورة --</option>' +
+    (data || []).map(s => `<option value="${s.id}">${new Date(s.sale_date).toLocaleString('ar')} - ${Number(s.total).toFixed(0)}</option>`).join('');
+  $('#return-sale-items').innerHTML = '';
+}
+
+$('#return-sale-picker').addEventListener('change', async (e) => {
+  const saleId = e.target.value;
+  if (!saleId) { $('#return-sale-items').innerHTML = ''; return; }
+  const { data, error } = await supabase.from('sale_items').select('*').eq('sale_id', saleId);
+  if (error) { console.error(error); return; }
+  $('#return-sale-items').innerHTML = (data || []).map(item => `
+    <div class="cart-row" style="grid-template-columns: 1fr auto auto auto;">
+      <span>${escapeHtml(item.product_name)}</span>
+      <span>بالفاتورة: ${item.quantity}</span>
+      <input type="number" class="return-qty-input" value="1" min="1" max="${item.quantity}" style="width:70px;">
+      <button class="btn tiny do-return-item"
+        data-product-id="${item.product_id || ''}"
+        data-product-name="${escapeAttr(item.product_name)}"
+        data-unit-price="${item.unit_price}"
+        data-sale-id="${saleId}">↩ إرجاع</button>
+    </div>
+  `).join('') || '<p class="empty">لا يوجد أصناف بهاي الفاتورة</p>';
+});
+
+$('#return-sale-items').addEventListener('click', async (e) => {
+  const btn = e.target.closest('.do-return-item');
+  if (!btn) return;
+  const qtyInput = btn.previousElementSibling;
+  const qty = parseInt(qtyInput.value || 0, 10);
+  if (!qty || qty <= 0) { alert('كمية غير صحيحة'); return; }
+  const productId = btn.dataset.productId || null;
+  const productName = btn.dataset.productName;
+  const unitPrice = parseFloat(btn.dataset.unitPrice);
+  const saleId = btn.dataset.saleId;
+
+  if (productId) {
+    const product = productsCache.find(p => p.id === productId);
+    const currentQty = product ? product.quantity : 0;
+    const { error: updErr } = await supabase.from('products').update({ quantity: currentQty + qty }).eq('id', productId);
+    if (updErr) { alert('خطأ بتحديث المخزون: ' + updErr.message); return; }
+  }
+
+  const { error: retErr } = await supabase.from('returns').insert({
+    branch_id: activeBranchId, sale_id: saleId, product_id: productId, product_name: productName,
+    quantity: qty, unit_price: unitPrice, type: 'customer', note: null,
+  });
+  if (retErr) { alert('خطأ بتسجيل المرتجع: ' + retErr.message); return; }
+
+  await supabase.from('activity_log').insert({
+    branch_id: activeBranchId, action_type: 'customer_return',
+    description: `مرتجع من زبون: ${productName} (${qty})`,
+    amount: qty * unitPrice, performed_by: currentProfile.id,
+  });
+
+  alert('تم تسجيل المرتجع ✅');
+  await loadProducts();
+  await loadReturns();
+  await loadActivityLog();
+});
+
+async function loadSupplierReturnProductPicker() {
+  const current = $('#supplier-return-product').value;
+  $('#supplier-return-product').innerHTML = '<option value="">-- اختر منتج --</option>' +
+    productsCache.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (متوفر: ${p.quantity})</option>`).join('');
+  if (current) $('#supplier-return-product').value = current;
+}
+
+$('#supplier-return-btn').addEventListener('click', async () => {
+  const productId = $('#supplier-return-product').value;
+  const qty = parseInt($('#supplier-return-qty').value || 0, 10);
+  const note = $('#supplier-return-note').value.trim() || null;
+  if (!productId || !qty || qty <= 0) { alert('اختر منتج وكمية صحيحة'); return; }
+  const product = productsCache.find(p => p.id === productId);
+  if (!product) return;
+  const newQty = Math.max(product.quantity - qty, 0);
+
+  const { error: updErr } = await supabase.from('products').update({ quantity: newQty }).eq('id', productId);
+  if (updErr) { alert('خطأ: ' + updErr.message); return; }
+
+  const { error: retErr } = await supabase.from('returns').insert({
+    branch_id: activeBranchId, sale_id: null, product_id: productId, product_name: product.name,
+    quantity: qty, unit_price: product.cost_price, type: 'supplier', note,
+  });
+  if (retErr) alert('تم خصم الكمية، لكن صار خطأ بتسجيل المرتجع بالسجل: ' + retErr.message);
+
+  await supabase.from('activity_log').insert({
+    branch_id: activeBranchId, action_type: 'supplier_return',
+    description: `مرتجع للمورد: ${product.name} (${qty})` + (note ? ' - ' + note : ''),
+    amount: qty * Number(product.cost_price), performed_by: currentProfile.id,
+  });
+
+  $('#supplier-return-qty').value = 1;
+  $('#supplier-return-note').value = '';
+  await loadProducts();
+  await loadReturns();
+  await loadActivityLog();
+});
+
+async function loadReturns() {
+  const { data, error } = await supabase
+    .from('returns')
+    .select('*')
+    .eq('branch_id', activeBranchId)
+    .order('return_date', { ascending: false })
+    .limit(100);
+  if (error) { console.error(error); return; }
+  $('#returns-list').innerHTML = (data || []).map(r => `
+    <tr>
+      <td>${new Date(r.return_date).toLocaleString('ar')}</td>
+      <td>${r.type === 'customer' ? 'من زبون' : 'للمورد'}</td>
+      <td>${escapeHtml(r.product_name)}</td>
+      <td>${r.quantity}</td>
+      <td>${Number(r.unit_price).toFixed(0)}</td>
+      <td>${escapeHtml(r.note || '-')}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="6">لا يوجد مرتجعات</td></tr>';
+}
+
 // ---------------- سجل العمليات (صاحب المحل) ----------------
 async function loadActivityLog() {
   const { data, error } = await supabase
@@ -864,6 +1032,14 @@ function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str ?? '';
   return div.innerHTML;
+}
+
+function escapeAttr(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 // ---------------- بدء التشغيل: هل في جلسة دخول محفوظة؟ ----------------
