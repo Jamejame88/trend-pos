@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>نقطة بيع - محل الهدايا (ويب)</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1a6b3c">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="icon" href="icons/icon-192.png">
+<style>
+  :root {
+    --green: #1a6b3c;
+    --orange: #b3541e;
+    --red: #a33;
+    --bg: #f4f5f7;
+    --card: #ffffff;
+    --border: #dcdfe4;
+    --text: #23262b;
+    --muted: #767c86;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  .screen { display: none; min-height: 100vh; }
+  .screen.active { display: block; }
+
+  /* ---------- شاشة الدخول ---------- */
+  #login-screen.active {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .login-box {
+    background: var(--card);
+    border-radius: 14px;
+    padding: 28px 24px;
+    width: 100%;
+    max-width: 360px;
+    box-shadow: 0 4px 18px rgba(0,0,0,0.08);
+  }
+  .login-box h1 { font-size: 20px; text-align: center; margin-bottom: 20px; }
+  .field { margin-bottom: 14px; }
+  .field label { display: block; margin-bottom: 6px; font-size: 14px; color: var(--muted); }
+  .field input, .field select {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 15px;
+  }
+  .btn {
+    display: inline-block;
+    padding: 12px 18px;
+    border: none;
+    border-radius: 8px;
+    background: var(--green);
+    color: #fff;
+    font-size: 15px;
+    font-weight: bold;
+    cursor: pointer;
+  }
+  .btn.block { width: 100%; }
+  .btn.small { padding: 8px 12px; font-size: 13px; }
+  .btn.tiny { padding: 5px 9px; font-size: 12px; }
+  .btn.secondary { background: #556; }
+  .btn.danger { background: var(--red); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .error-text { color: var(--red); font-size: 13px; margin-top: 8px; min-height: 18px; }
+
+  /* ---------- تطبيق ---------- */
+  header.app-header {
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  header.app-header .title { font-weight: bold; font-size: 16px; }
+  header.app-header .right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  #user-info { font-size: 13px; color: var(--muted); }
+  #branch-picker { padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border); }
+
+  nav.tabs {
+    display: flex;
+    overflow-x: auto;
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+  }
+  .tab-btn {
+    flex: 0 0 auto;
+    padding: 12px 16px;
+    background: none;
+    border: none;
+    border-bottom: 3px solid transparent;
+    font-size: 14px;
+    color: var(--muted);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .tab-btn.active { color: var(--green); border-bottom-color: var(--green); font-weight: bold; }
+
+  main { padding: 14px; max-width: 1000px; margin: 0 auto; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px;
+    margin-bottom: 14px;
+  }
+  .card h2 { font-size: 15px; margin: 0 0 10px; }
+
+  /* نقطة البيع */
+  .pos-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
+  @media (min-width: 800px) {
+    .pos-grid { grid-template-columns: 1.3fr 1fr; }
+  }
+  #sale-search { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 10px; font-size: 15px; }
+  .product-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  .product-row .product-name { flex: 1; font-weight: bold; font-size: 14px; }
+  .product-row .product-meta { font-size: 12px; color: var(--muted); flex: 1; }
+  .product-row .product-price { font-weight: bold; color: var(--green); font-size: 14px; }
+
+  .cart-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto auto;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 4px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 12px; }
+
+  .totals-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 14px; }
+  .totals-row.big { font-size: 18px; font-weight: bold; color: var(--green); }
+  .totals-row input { width: 110px; padding: 8px; border-radius: 8px; border: 1px solid var(--border); text-align: center; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table th, table td { padding: 8px 6px; border-bottom: 1px solid var(--border); text-align: center; }
+  table th { color: var(--muted); font-weight: normal; }
+  tr.cancelled-row { color: var(--red); }
+
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  @media (max-width: 500px) { .form-grid { grid-template-columns: 1fr; } }
+
+  .danger-zone {
+    border: 1px dashed var(--red);
+    border-radius: 12px;
+    padding: 12px;
+    margin-top: 20px;
+  }
+  .danger-zone h3 { color: var(--red); font-size: 14px; margin: 0 0 8px; }
+
+  .note {
+    background: #fff8e6;
+    border: 1px solid #f0d98c;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 13px;
+    color: #6b5a1e;
+    margin-bottom: 14px;
+  }
+</style>
+</head>
+<body>
+
+<!-- ==================== شاشة تسجيل الدخول ==================== -->
+<div id="login-screen" class="screen active">
+  <div class="login-box">
+    <h1>🛍 نقطة بيع - محل الهدايا</h1>
+    <form id="login-form">
+      <div class="field">
+        <label>اسم المستخدم</label>
+        <input type="text" id="login-username" autocomplete="username" required>
+      </div>
+      <div class="field">
+        <label>كلمة السر</label>
+        <input type="password" id="login-password" autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="btn block">دخول</button>
+      <div class="error-text" id="login-error"></div>
+    </form>
+  </div>
+</div>
+
+<!-- ==================== التطبيق بعد الدخول ==================== -->
+<div id="app-screen" class="screen">
+  <header class="app-header">
+    <div class="title">🛍 نقطة بيع</div>
+    <div class="right">
+      <select id="branch-picker" style="display:none;"></select>
+      <span id="user-info"></span>
+      <button class="btn small secondary" id="logout-btn">خروج</button>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="pos">نقطة البيع</button>
+    <button class="tab-btn owner-only" data-tab="products">المنتجات</button>
+    <button class="tab-btn owner-only" data-tab="history">سجل المبيعات</button>
+    <button class="tab-btn owner-only" data-tab="log">سجل العمليات</button>
+  </nav>
+
+  <main>
+    <!-- ---------- نقطة البيع ---------- -->
+    <section id="tab-pos" class="tab-panel active">
+      <div class="pos-grid">
+        <div class="card">
+          <h2>المنتجات</h2>
+          <input type="text" id="sale-search" placeholder="بحث بالاسم / الباركود / التصنيف...">
+          <div id="sale-products-list"></div>
+        </div>
+        <div class="card">
+          <h2>السلة</h2>
+          <div id="cart-list"><p class="empty">السلة فاضية</p></div>
+          <div class="totals-row"><span>المجموع الفرعي</span><span id="subtotal-display">0</span></div>
+          <div class="totals-row">
+            <span>الخصم</span>
+            <input type="number" id="discount-input" value="0" min="0">
+          </div>
+          <div class="totals-row big"><span>الإجمالي</span><span id="total-display">0</span></div>
+          <div class="totals-row">
+            <span>المدفوع</span>
+            <input type="number" id="paid-input" value="0" min="0">
+          </div>
+          <div class="totals-row"><span>الباقي</span><span id="change-display">0</span></div>
+          <button class="btn block" id="checkout-btn" style="margin-top:10px;">✔ إتمام عملية البيع</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- المنتجات (صاحب المحل) ---------- -->
+    <section id="tab-products" class="tab-panel">
+      <div class="card">
+        <h2>إضافة / تعديل منتج</h2>
+        <form id="product-form">
+          <div class="form-grid">
+            <div class="field"><label>اسم المنتج *</label><input type="text" id="product-name" required></div>
+            <div class="field"><label>التصنيف</label><input type="text" id="product-category"></div>
+            <div class="field"><label>الباركود</label><input type="text" id="product-barcode"></div>
+            <div class="field"><label>سعر الشراء</label><input type="number" id="product-cost" value="0" min="0"></div>
+            <div class="field"><label>سعر البيع *</label><input type="number" id="product-sell" required min="0"></div>
+            <div class="field"><label>الكمية</label><input type="number" id="product-qty" value="0" min="0"></div>
+            <div class="field"><label>حد التنبيه</label><input type="number" id="product-min" value="3" min="0"></div>
+          </div>
+          <button type="submit" class="btn">💾 حفظ</button>
+          <button type="button" class="btn secondary" id="product-form-reset">جديد / تفريغ</button>
+        </form>
+      </div>
+      <div class="card">
+        <h2>قائمة المنتجات (الفرع الحالي)</h2>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead><tr><th>الاسم</th><th>التصنيف</th><th>سعر الشراء</th><th>سعر البيع</th><th>الكمية</th><th></th></tr></thead>
+            <tbody id="admin-products-list"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- سجل المبيعات (صاحب المحل) ---------- -->
+    <section id="tab-history" class="tab-panel">
+      <div class="card">
+        <h2>آخر 100 فاتورة (الفرع الحالي)</h2>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead><tr><th>التاريخ</th><th>الإجمالي</th><th>المدفوع</th><th>الحالة</th><th></th></tr></thead>
+            <tbody id="sales-history-list"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- سجل العمليات (صاحب المحل) ---------- -->
+    <section id="tab-log" class="tab-panel">
+      <div class="card">
+        <h2>آخر 100 عملية (الفرع الحالي)</h2>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead><tr><th>التاريخ</th><th>النوع</th><th>التفاصيل</th><th>المبلغ</th></tr></thead>
+            <tbody id="activity-log-list"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script type="module">
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+// ============================================================
+// عدّل هالثلاث قيم بس بعد ما تجهز مشروعك على Supabase (شوف دليل التركيب)
+// ============================================================
+const SUPABASE_URL = "https://incloqbhtksnxqiohvaw.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_jfAFLXWXJpIrRfkd_CcWlw_xjGgEUEX";
+const FAKE_EMAIL_DOMAIN = "trend-pos.local"; // نطاق وهمي لتحويل اسم المستخدم لإيميل يقبله نظام الدخول
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+let currentProfile = null;
+let branches = [];
+let activeBranchId = null;
+let cart = [];
+let productsCache = [];
+
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => document.querySelectorAll(sel);
+
+function showScreen(id) {
+  $$('.screen').forEach(el => el.classList.remove('active'));
+  $(id).classList.add('active');
+}
+
+function toEmail(username) {
+  return `${username.trim().toLowerCase()}@${FAKE_EMAIL_DOMAIN}`;
+}
+
+// ---------------- تسجيل الدخول ----------------
+$('#login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const username = $('#login-username').value.trim();
+  const password = $('#login-password').value;
+  const errBox = $('#login-error');
+  errBox.textContent = '';
+  if (!username || !password) return;
+
+  const { error } = await supabase.auth.signInWithPassword({ email: toEmail(username), password });
+  if (error) {
+    errBox.textContent = 'اسم المستخدم أو كلمة السر غلط';
+    return;
+  }
+  await afterLogin();
+});
+
+async function afterLogin() {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) { showScreen('#login-screen'); return; }
+
+  const { data: profile, error } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+  if (error || !profile) {
+    alert('ما قدرنا نجيب بيانات حسابك. تأكد إنه تم إنشاء صف إلك بجدول profiles بنفس الـ id تبع حسابك.');
+    await supabase.auth.signOut();
+    showScreen('#login-screen');
+    return;
+  }
+  currentProfile = profile;
+
+  const { data: branchRows } = await supabase.from('branches').select('*').order('name');
+  branches = branchRows || [];
+  activeBranchId = profile.branch_id || (branches[0] && branches[0].id) || null;
+
+  setupUIForRole();
+  showScreen('#app-screen');
+  await refreshAll();
+}
+
+function setupUIForRole() {
+  $('#user-info').textContent = `${currentProfile.full_name || currentProfile.username} (${currentProfile.role === 'owner' ? 'صاحب المحل' : 'موظف'})`;
+
+  const picker = $('#branch-picker');
+  if (currentProfile.role === 'owner') {
+    picker.style.display = 'inline-block';
+    picker.innerHTML = branches.map(b => `<option value="${b.id}">${b.name}</option>`).join('');
+    picker.value = activeBranchId;
+    $$('.owner-only').forEach(el => el.style.display = '');
+  } else {
+    picker.style.display = 'none';
+    $$('.owner-only').forEach(el => el.style.display = 'none');
+  }
+}
+
+$('#branch-picker').addEventListener('change', async (e) => {
+  activeBranchId = e.target.value;
+  await refreshAll();
+});
+
+$('#logout-btn').addEventListener('click', async () => {
+  await supabase.auth.signOut();
+  location.reload();
+});
+
+// ---------------- التبويبات ----------------
+$$('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    $$('.tab-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    $$('.tab-panel').forEach(p => p.classList.remove('active'));
+    $(`#tab-${btn.dataset.tab}`).classList.add('active');
+  });
+});
+
+// ---------------- تحميل البيانات ----------------
+async function refreshAll() {
+  await loadProducts();
+  if (currentProfile.role === 'owner') {
+    await loadSalesHistory();
+    await loadActivityLog();
+  }
+}
+
+async function loadProducts() {
+  const { data, error } = await supabase.from('products').select('*').eq('branch_id', activeBranchId).order('name');
+  if (error) { console.error(error); return; }
+  productsCache = data || [];
+  renderProductsForSale();
+  renderProductsAdmin();
+}
+
+// ---------------- نقطة البيع ----------------
+function renderProductsForSale() {
+  const q = $('#sale-search').value.trim().toLowerCase();
+  const list = productsCache.filter(p =>
+    !q || p.name.toLowerCase().includes(q) || (p.barcode || '').toLowerCase().includes(q) || (p.category || '').toLowerCase().includes(q)
+  );
+  $('#sale-products-list').innerHTML = list.map(p => `
+    <div class="product-row">
+      <div class="product-name">${escapeHtml(p.name)}</div>
+      <div class="product-meta">${escapeHtml(p.category || '-')} · متوفر: ${p.quantity}</div>
+      <div class="product-price">${Number(p.sell_price).toFixed(0)}</div>
+      <button class="btn tiny add-to-cart" data-id="${p.id}">أضف</button>
+    </div>
+  `).join('') || '<p class="empty">لا يوجد منتجات بهالفرع</p>';
+}
+
+$('#sale-search').addEventListener('input', renderProductsForSale);
+
+$('#sale-products-list').addEventListener('click', (e) => {
+  const btn = e.target.closest('.add-to-cart');
+  if (!btn) return;
+  addToCart(btn.dataset.id);
+});
+
+function addToCart(productId) {
+  const product = productsCache.find(p => p.id === productId);
+  if (!product) return;
+  const existing = cart.find(i => i.product_id === productId);
+  if (existing) {
+    existing.qty += 1;
+    existing.subtotal = existing.qty * existing.price;
+  } else {
+    cart.push({
+      product_id: product.id, name: product.name,
+      price: Number(product.sell_price), cost: Number(product.cost_price || 0),
+      qty: 1, subtotal: Number(product.sell_price),
+    });
+  }
+  renderCart();
+}
+
+function renderCart() {
+  $('#cart-list').innerHTML = cart.map((item, idx) => `
+    <div class="cart-row">
+      <span>${escapeHtml(item.name)}</span>
+      <span>${item.qty} × ${item.price.toFixed(0)}</span>
+      <span>${item.subtotal.toFixed(0)}</span>
+      <button class="btn tiny danger remove-item" data-idx="${idx}">✕</button>
+    </div>
+  `).join('') || '<p class="empty">السلة فاضية</p>';
+  updateTotals();
+}
+
+$('#cart-list').addEventListener('click', (e) => {
+  const btn = e.target.closest('.remove-item');
+  if (!btn) return;
+  cart.splice(Number(btn.dataset.idx), 1);
+  renderCart();
+});
+
+function updateTotals() {
+  const subtotal = cart.reduce((s, i) => s + i.subtotal, 0);
+  const discount = parseFloat($('#discount-input').value || 0);
+  const total = Math.max(subtotal - discount, 0);
+  const paid = parseFloat($('#paid-input').value || 0);
+  const change = paid - total;
+  $('#subtotal-display').textContent = subtotal.toFixed(0);
+  $('#total-display').textContent = total.toFixed(0);
+  $('#change-display').textContent = change >= 0 ? change.toFixed(0) : 'غير كافٍ';
+}
+$('#discount-input').addEventListener('input', updateTotals);
+$('#paid-input').addEventListener('input', updateTotals);
+
+$('#checkout-btn').addEventListener('click', async () => {
+  if (!cart.length) { alert('السلة فاضية'); return; }
+  const subtotal = cart.reduce((s, i) => s + i.subtotal, 0);
+  const discount = parseFloat($('#discount-input').value || 0);
+  const total = Math.max(subtotal - discount, 0);
+  const paid = parseFloat($('#paid-input').value || 0);
+  const change = Math.max(paid - total, 0);
+
+  if (paid < total) {
+    const ok = confirm('المبلغ المدفوع أقل من الإجمالي.\nملاحظة: هاي أول نسخة ويب من البرنامج، وتسجيل "دين" رسمي لسا ما انضاف - رح تنسجل الفاتورة بس بالمبلغ المدفوع الفعلي. متابعة؟');
+    if (!ok) return;
+  }
+
+  const { data: saleId, error } = await supabase.rpc('create_sale_tx', {
+    p_branch_id: activeBranchId,
+    p_cart: cart,
+    p_subtotal: subtotal,
+    p_discount: discount,
+    p_total: total,
+    p_paid: paid,
+    p_change_due: change,
+    p_sold_by: currentProfile.id,
+  });
+
+  if (error) {
+    alert('صار خطأ بإتمام البيع: ' + error.message);
+    return;
+  }
+
+  alert(`تمت عملية البيع بنجاح ✅\nالإجمالي: ${total.toFixed(0)}\nالباقي: ${change.toFixed(0)}`);
+  cart = [];
+  $('#discount-input').value = 0;
+  $('#paid-input').value = 0;
+  renderCart();
+  await loadProducts();
+  if (currentProfile.role === 'owner') await loadSalesHistory();
+});
+
+// ---------------- إدارة المنتجات (صاحب المحل) ----------------
+let editingProductId = null;
+
+function renderProductsAdmin() {
+  if (currentProfile.role !== 'owner') return;
+  $('#admin-products-list').innerHTML = productsCache.map(p => `
+    <tr>
+      <td>${escapeHtml(p.name)}</td>
+      <td>${escapeHtml(p.category || '-')}</td>
+      <td>${Number(p.cost_price).toFixed(0)}</td>
+      <td>${Number(p.sell_price).toFixed(0)}</td>
+      <td>${p.quantity}</td>
+      <td>
+        <button class="btn tiny edit-product" data-id="${p.id}">تعديل</button>
+        <button class="btn tiny danger delete-product" data-id="${p.id}">حذف</button>
+      </td>
+    </tr>
+  `).join('') || '<tr><td colspan="6">لا يوجد منتجات</td></tr>';
+}
+
+$('#admin-products-list').addEventListener('click', async (e) => {
+  const editBtn = e.target.closest('.edit-product');
+  const delBtn = e.target.closest('.delete-product');
+  if (editBtn) {
+    fillProductForm(productsCache.find(p => p.id === editBtn.dataset.id));
+  }
+  if (delBtn) {
+    if (!confirm('حذف هاد المنتج نهائيًا؟')) return;
+    const { error } = await supabase.from('products').delete().eq('id', delBtn.dataset.id);
+    if (error) { alert('خطأ: ' + error.message); return; }
+    await loadProducts();
+  }
+});
+
+function fillProductForm(p) {
+  editingProductId = p ? p.id : null;
+  $('#product-name').value = p ? p.name : '';
+  $('#product-category').value = p ? (p.category || '') : '';
+  $('#product-barcode').value = p ? (p.barcode || '') : '';
+  $('#product-cost').value = p ? p.cost_price : 0;
+  $('#product-sell').value = p ? p.sell_price : '';
+  $('#product-qty').value = p ? p.quantity : 0;
+  $('#product-min').value = p ? p.min_quantity : 3;
+}
+
+$('#product-form-reset').addEventListener('click', () => fillProductForm(null));
+
+$('#product-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const payload = {
+    branch_id: activeBranchId,
+    name: $('#product-name').value.trim(),
+    category: $('#product-category').value.trim() || null,
+    barcode: $('#product-barcode').value.trim() || null,
+    cost_price: parseFloat($('#product-cost').value || 0),
+    sell_price: parseFloat($('#product-sell').value || 0),
+    quantity: parseInt($('#product-qty').value || 0, 10),
+    min_quantity: parseInt($('#product-min').value || 3, 10),
+  };
+  if (!payload.name || !payload.sell_price) { alert('اسم المنتج وسعر البيع إجباريين'); return; }
+
+  let error;
+  if (editingProductId) {
+    ({ error } = await supabase.from('products').update(payload).eq('id', editingProductId));
+  } else {
+    ({ error } = await supabase.from('products').insert(payload));
+  }
+  if (error) { alert('خطأ بالحفظ: ' + error.message); return; }
+  fillProductForm(null);
+  await loadProducts();
+});
+
+// ---------------- سجل المبيعات (صاحب المحل) ----------------
+async function loadSalesHistory() {
+  const { data, error } = await supabase
+    .from('sales')
+    .select('*')
+    .eq('branch_id', activeBranchId)
+    .order('sale_date', { ascending: false })
+    .limit(100);
+  if (error) { console.error(error); return; }
+  $('#sales-history-list').innerHTML = (data || []).map(s => `
+    <tr class="${s.status === 'cancelled' ? 'cancelled-row' : ''}">
+      <td>${new Date(s.sale_date).toLocaleString('ar')}</td>
+      <td>${Number(s.total).toFixed(0)}</td>
+      <td>${Number(s.paid).toFixed(0)}</td>
+      <td>${s.status === 'cancelled' ? 'ملغاة ❌' : 'مكتملة'}</td>
+      <td>${s.status !== 'cancelled' ? `<button class="btn tiny danger cancel-sale" data-id="${s.id}">إلغاء</button>` : '-'}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="5">لا يوجد فواتير</td></tr>';
+}
+
+$('#sales-history-list').addEventListener('click', async (e) => {
+  const btn = e.target.closest('.cancel-sale');
+  if (!btn) return;
+  if (!confirm('متأكد تريد إلغاء هاي الفاتورة؟ رح ترجع الكمية للمخزون تلقائيًا، ولا يمكن التراجع.')) return;
+  const { error } = await supabase.rpc('cancel_sale_tx', { p_sale_id: btn.dataset.id, p_performed_by: currentProfile.id });
+  if (error) { alert('خطأ: ' + error.message); return; }
+  await loadSalesHistory();
+  await loadProducts();
+  await loadActivityLog();
+});
+
+// ---------------- سجل العمليات (صاحب المحل) ----------------
+async function loadActivityLog() {
+  const { data, error } = await supabase
+    .from('activity_log')
+    .select('*')
+    .eq('branch_id', activeBranchId)
+    .order('log_date', { ascending: false })
+    .limit(100);
+  if (error) { console.error(error); return; }
+  $('#activity-log-list').innerHTML = (data || []).map(r => `
+    <tr>
+      <td>${new Date(r.log_date).toLocaleString('ar')}</td>
+      <td>${actionLabel(r.action_type)}</td>
+      <td>${escapeHtml(r.description)}</td>
+      <td>${r.amount ? Number(r.amount).toFixed(0) : '-'}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="4">لا يوجد عمليات مسجّلة</td></tr>';
+}
+
+function actionLabel(t) {
+  return {
+    sale: 'عملية بيع',
+    sale_cancel: 'إلغاء فاتورة',
+    customer_return: 'مرتجع من زبون',
+    supplier_return: 'مرتجع للمورد',
+    debt_payment: 'دفعة دين',
+  }[t] || t;
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str ?? '';
+  return div.innerHTML;
+}
+
+// ---------------- بدء التشغيل: هل في جلسة دخول محفوظة؟ ----------------
+(async function init() {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session) {
+    await afterLogin();
+  } else {
+    showScreen('#login-screen');
+  }
+})();
+
+// ---------------- تسجيل الـ Service Worker (يخلي الموقع قابل للتنصيب كتطبيق) ----------------
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch((err) => console.error('SW register failed:', err));
+  });
+}
+</script>
+
+</body>
+</html>
