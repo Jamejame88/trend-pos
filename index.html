@@ -541,6 +541,7 @@ let currentProfile = null;
 let branches = [];
 let activeBranchId = null;
 let cart = [];
+let paidManuallyEdited = false; // إذا الكاشير عدّل خانة "المدفوع" يدويًا، منوقف المزامنة التلقائية مع الإجمالي لحد ما تنتهي الفاتورة الحالية
 let productsCache = [];
 
 const $ = (sel) => document.querySelector(sel);
@@ -745,6 +746,11 @@ function updateTotals() {
   const subtotal = cart.reduce((s, i) => s + i.subtotal, 0);
   const discount = parseFloat($('#discount-input').value || 0);
   const total = Math.max(subtotal - discount, 0);
+  // المبلغ المدفوع بيساوي الإجمالي تلقائيًا افتراضيًا (يعني "دفع كامل" هو الافتراضي)،
+  // إلا إذا الكاشير عدّل الخانة يدويًا بهاي الفاتورة - عندها منحترم القيمة يلي كتبها هو.
+  if (!paidManuallyEdited) {
+    $('#paid-input').value = total ? total.toFixed(0) : 0;
+  }
   const paid = parseFloat($('#paid-input').value || 0);
   const change = paid - total;
   $('#subtotal-display').textContent = subtotal.toFixed(0);
@@ -752,7 +758,10 @@ function updateTotals() {
   $('#change-display').textContent = change >= 0 ? change.toFixed(0) : 'غير كافٍ';
 }
 $('#discount-input').addEventListener('input', updateTotals);
-$('#paid-input').addEventListener('input', updateTotals);
+$('#paid-input').addEventListener('input', () => {
+  paidManuallyEdited = true;
+  updateTotals();
+});
 
 // ---------------- كود خصم من عجلة الحظ (موقع الزبائن) ----------------
 $('#coupon-check-btn').addEventListener('click', async () => {
@@ -852,6 +861,7 @@ $('#checkout-btn').addEventListener('click', async () => {
 
   cart = [];
   $('#discount-input').value = 0;
+  paidManuallyEdited = false;
   $('#paid-input').value = 0;
   renderCart();
   await loadProducts();
