@@ -308,6 +308,18 @@
           </table>
         </div>
       </div>
+
+      <div class="card">
+        <h2>🔀 نقل كل منتجات هاد الفرع لفرع تاني</h2>
+        <p style="font-size:13px; color:var(--muted); margin-top:0;">مفيد وقت إغلاق فرع ودمجه بفرع تاني عشان يصير محل واحد - بينقل كل المنتجات (بكمياتها وأسعارها) للفرع المختار، ويفضى هاد الفرع منها.</p>
+        <div class="form-grid">
+          <div class="field">
+            <label>انقل منتجات "<span id="move-from-branch-name">-</span>" إلى:</label>
+            <select id="move-target-branch"></select>
+          </div>
+        </div>
+        <button class="btn danger" id="move-products-btn">🔀 نقل كل المنتجات الآن</button>
+      </div>
     </section>
 
     <!-- ---------- سجل المبيعات (صاحب المحل) ---------- -->
@@ -522,6 +534,7 @@ function setupUIForRole() {
     picker.innerHTML = branches.map(b => `<option value="${b.id}">${b.name}</option>`).join('');
     picker.value = activeBranchId;
     $$('.owner-only').forEach(el => el.style.display = '');
+    renderMoveBranchPicker();
   } else {
     picker.style.display = 'none';
     $$('.owner-only').forEach(el => el.style.display = 'none');
@@ -530,7 +543,35 @@ function setupUIForRole() {
 
 $('#branch-picker').addEventListener('change', async (e) => {
   activeBranchId = e.target.value;
+  renderMoveBranchPicker();
   await refreshAll();
+});
+
+// ---------------- نقل منتجات بين الفروع (صاحب المحل) ----------------
+function renderMoveBranchPicker() {
+  const targetSelect = $('#move-target-branch');
+  if (!targetSelect) return;
+  const others = branches.filter(b => b.id !== activeBranchId);
+  targetSelect.innerHTML = others.map(b => `<option value="${b.id}">${escapeHtml(b.name)}</option>`).join('') || '<option value="">لا يوجد فرع تاني</option>';
+  $('#move-from-branch-name').textContent = (branches.find(b => b.id === activeBranchId) || {}).name || '-';
+}
+
+$('#move-products-btn').addEventListener('click', async () => {
+  const targetId = $('#move-target-branch').value;
+  if (!targetId) { alert('ما في فرع تاني تنقل له'); return; }
+  const fromName = (branches.find(b => b.id === activeBranchId) || {}).name || 'هاد الفرع';
+  const toName = (branches.find(b => b.id === targetId) || {}).name || 'الفرع المختار';
+  const count = productsCache.length;
+  if (!count) { alert('ما في منتجات بهاد الفرع لنقلها'); return; }
+
+  const ok = confirm(`متأكد تريد نقل كل منتجات "${fromName}" (${count} منتج) إلى "${toName}"؟\nبعدها "${fromName}" ما يضل فيه أي منتجات. هاد الإجراء لا يمكن التراجع عنه.`);
+  if (!ok) return;
+
+  const { error } = await supabase.from('products').update({ branch_id: targetId }).eq('branch_id', activeBranchId);
+  if (error) { alert('صار خطأ: ' + error.message); return; }
+
+  alert(`تم نقل ${count} منتج إلى "${toName}" بنجاح ✅`);
+  await loadProducts();
 });
 
 $('#logout-btn').addEventListener('click', async () => {
