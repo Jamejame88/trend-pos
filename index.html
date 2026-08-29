@@ -71,6 +71,8 @@
   .btn.secondary { background: #556; }
   .btn.danger { background: var(--red); }
   .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn.chip { padding: 6px 14px; border-radius: 20px; font-size: 13px; background: #e3e6ea; color: #333; }
+  .btn.chip.active { background: var(--green); color: #fff; }
   .error-text { color: var(--red); font-size: 13px; margin-top: 8px; min-height: 18px; }
 
   /* ---------- تطبيق ---------- */
@@ -310,6 +312,7 @@
             <input type="text" id="sale-search" placeholder="بحث بالاسم / الباركود / التصنيف...">
             <button type="button" class="btn secondary" id="scan-search-btn">📷 مسح</button>
           </div>
+          <div id="category-filter-row" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px;"></div>
           <div id="sale-products-list"></div>
         </div>
       </div>
@@ -677,17 +680,42 @@ async function loadProducts() {
   const { data, error } = await supabase.from('products').select('*').eq('branch_id', activeBranchId).order('name');
   if (error) { console.error(error); return; }
   productsCache = data || [];
+  renderCategoryFilters();
   renderProductsForSale();
   renderProductsAdmin();
   if (currentProfile && currentProfile.role === 'owner') await loadSupplierReturnProductPicker();
 }
 
 // ---------------- نقطة البيع ----------------
+let activeSaleCategory = null; // null = كل المنتجات
+
+function renderCategoryFilters() {
+  const categories = [...new Set(productsCache.map(p => (p.category || '').trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare('ar'));
+  // إذا التصنيف المختار حاليًا صار غير موجود (انحذف/تغيّر)، نرجع لـ"كل المنتجات"
+  if (activeSaleCategory && !categories.includes(activeSaleCategory)) activeSaleCategory = null;
+
+  const chips = [
+    `<button type="button" class="btn chip category-chip ${!activeSaleCategory ? 'active' : ''}" data-cat="">كل المنتجات</button>`,
+    ...categories.map(c => `<button type="button" class="btn chip category-chip ${activeSaleCategory === c ? 'active' : ''}" data-cat="${escapeAttr(c)}">${escapeHtml(c)}</button>`),
+  ];
+  $('#category-filter-row').innerHTML = chips.join('');
+}
+
+$('#category-filter-row').addEventListener('click', (e) => {
+  const chip = e.target.closest('.category-chip');
+  if (!chip) return;
+  activeSaleCategory = chip.dataset.cat || null;
+  renderCategoryFilters();
+  renderProductsForSale();
+});
+
 function renderProductsForSale() {
   const q = $('#sale-search').value.trim().toLowerCase();
-  const list = productsCache.filter(p =>
-    !q || p.name.toLowerCase().includes(q) || (p.barcode || '').toLowerCase().includes(q) || (p.category || '').toLowerCase().includes(q)
-  );
+  const list = productsCache.filter(p => {
+    if (activeSaleCategory && (p.category || '') !== activeSaleCategory) return false;
+    return !q || p.name.toLowerCase().includes(q) || (p.barcode || '').toLowerCase().includes(q) || (p.category || '').toLowerCase().includes(q);
+  });
   $('#sale-products-list').innerHTML = list.map(p => `
     <div class="product-row">
       <div class="product-name">${escapeHtml(p.name)}</div>
@@ -695,7 +723,7 @@ function renderProductsForSale() {
       <div class="product-price">${Number(p.sell_price).toFixed(0)}</div>
       <button class="btn tiny add-to-cart" data-id="${p.id}">أضف</button>
     </div>
-  `).join('') || '<p class="empty">لا يوجد منتجات بهالفرع</p>';
+  `).join('') || '<p class="empty">لا يوجد منتجات بهالتصنيف</p>';
 }
 
 $('#sale-search').addEventListener('input', renderProductsForSale);
