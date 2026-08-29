@@ -299,7 +299,7 @@
           <div class="totals-row big"><span>الإجمالي</span><span id="total-display">0</span></div>
           <div class="totals-row">
             <span>المدفوع</span>
-            <input type="number" id="paid-input" value="0" min="0">
+            <input type="text" inputmode="numeric" dir="ltr" style="text-align:left" id="paid-input" value="0">
           </div>
           <div class="totals-row"><span>الباقي</span><span id="change-display">0</span></div>
           <button class="btn block" id="checkout-btn" style="margin-top:10px;">✔ إتمام عملية البيع</button>
@@ -757,9 +757,22 @@ function updateTotals() {
   $('#total-display').textContent = total.toFixed(0);
   $('#change-display').textContent = change >= 0 ? change.toFixed(0) : 'غير كافٍ';
 }
+// بيحوّل أي أرقام عربية (٠١٢٣...) أو فارسية يكتبها الكاشير من كيبورد الجوال العربي إلى أرقام إنكليزية عادية
+function toEnglishDigits(str) {
+  return String(str || '').replace(/[٠-٩۰-۹]/g, (d) => {
+    const code = d.charCodeAt(0);
+    if (code >= 0x0660 && code <= 0x0669) return String(code - 0x0660); // عربي
+    if (code >= 0x06F0 && code <= 0x06F9) return String(code - 0x06F0); // فارسي
+    return d;
+  });
+}
+
 $('#discount-input').addEventListener('input', updateTotals);
-$('#paid-input').addEventListener('input', () => {
+$('#paid-input').addEventListener('input', (e) => {
   paidManuallyEdited = true;
+  // نسمح فقط بأرقام إنكليزية بخانة المدفوع (بغض النظر عن لغة الكيبورد المستخدم)
+  const cleaned = toEnglishDigits(e.target.value).replace(/[^0-9]/g, '');
+  if (cleaned !== e.target.value) e.target.value = cleaned;
   updateTotals();
 });
 
