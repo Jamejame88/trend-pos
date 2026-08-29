@@ -320,6 +320,33 @@
         </div>
         <button class="btn danger" id="move-products-btn">🔀 نقل كل المنتجات الآن</button>
       </div>
+
+      <div class="card">
+        <h2>📸 استيراد فاتورة شراء بالذكاء الاصطناعي</h2>
+        <p style="font-size:13px; color:var(--muted); margin-top:0;">صوّر فاتورة الشراء من المورد، وبيقرا الأصناف تلقائيًا. راجع الأسعار والكميات قبل ما تأكد الاستيراد.</p>
+        <input type="file" id="invoice-file-input" accept="image/*" capture="environment" style="margin-bottom:10px;">
+        <button type="button" class="btn" id="invoice-analyze-btn">🤖 تحليل الفاتورة</button>
+        <div id="invoice-status" style="margin-top:8px; font-size:13px;"></div>
+
+        <div id="invoice-review-wrap" style="display:none; margin-top:14px;">
+          <div style="overflow-x:auto;">
+            <table>
+              <thead><tr><th>الاسم</th><th>التصنيف</th><th>الكمية</th><th>سعر الشراء</th><th>سعر البيع</th><th></th></tr></thead>
+              <tbody id="invoice-review-list"></tbody>
+            </table>
+          </div>
+          <button type="button" class="btn secondary tiny" id="invoice-add-row-btn" style="margin-top:8px;">+ إضافة سطر</button>
+          <div style="margin-top:10px; font-size:13px;">
+            <label style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
+              <input type="checkbox" id="invoice-update-cost" checked> تحديث سعر الشراء للمنتجات الموجودة أصلاً
+            </label>
+            <label style="display:flex; align-items:center; gap:6px;">
+              <input type="checkbox" id="invoice-update-sell"> تحديث سعر البيع للمنتجات الموجودة أصلاً
+            </label>
+          </div>
+          <button type="button" class="btn block" id="invoice-commit-btn" style="margin-top:10px;">✔ تأكيد الاستيراد للمخزون</button>
+        </div>
+      </div>
     </section>
 
     <!-- ---------- سجل المبيعات (صاحب المحل) ---------- -->
@@ -1219,6 +1246,170 @@ function closeScanner() {
 $('#scan-search-btn').addEventListener('click', () => openScanner('search'));
 $('#scan-barcode-btn').addEventListener('click', () => openScanner('formBarcode'));
 $('#scanner-close-btn').addEventListener('click', closeScanner);
+
+// ---------------- استيراد فاتورة بالذكاء الاصطناعي ----------------
+let invoiceItems = [];
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result || '';
+      const base64 = String(result).split(',')[1] || '';
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+$('#invoice-analyze-btn').addEventListener('click', async () => {
+  const fileInput = $('#invoice-file-input');
+  const file = fileInput.files && fileInput.files[0];
+  const statusEl = $('#invoice-status');
+  if (!file) { statusEl.textContent = '⚠ اختر صورة الفاتورة أولًا'; return; }
+
+  statusEl.textContent = '⏳ عم يحلل الفاتورة... ممكن ياخد شوي وقت';
+  $('#invoice-analyze-btn').disabled = true;
+  try {
+    const base64 = await fileToBase64(file);
+    const { data, error } = await supabase.functions.invoke('import-invoice', {
+      body: { image: base64, mimeType: file.type || 'image/jpeg' },
+    });
+
+    if (error) {
+      statusEl.textContent = '❌ خطأ بالاتصال بخدمة التحليل: ' + error.message;
+      return;
+    }
+    if (data && data.error) {
+      statusEl.textContent = '❌ ' + data.error;
+      return;
+    }
+
+    const items = (data && data.items) || [];
+    if (items.length === 0) {
+      statusEl.textContent = '⚠ ما قدر يميّز أصناف بالصورة. جرب صورة أوضح، أو أضف الأسطر يدويًا بزر "+ إضافة سطر".';
+    } else {
+      statusEl.textContent = `✅ لقى ${items.length} صنف - راجعهم وعدّل إذا لازم قبل التأكيد`;
+    }
+
+    invoiceItems = items.map((it) => {
+      const name = String(it.name || '').trim();
+      const existing = productsCache.find(p => p.name.trim().toLowerCase() === name.toLowerCase());
+      const cost = Number(it.price) || 0;
+      return {
+        name,
+        category: existing ? (existing.category || '') : '',
+        qty: Math.max(1, parseInt(it.qty) || 1),
+        cost,
+        sell: existing ? Number(existing.sell_price) : Math.round(cost * 1.2),
+        existingId: existing ? existing.id : null,
+      };
+    });
+    renderInvoiceRows();
+    $('#invoice-review-wrap').style.display = 'block';
+  } catch (err) {
+    statusEl.textContent = '❌ خطأ: ' + err.message;
+  } finally {
+    $('#invoice-analyze-btn').disabled = false;
+  }
+});
+
+function renderInvoiceRows() {
+  $('#invoice-review-list').innerHTML = invoiceItems.map((it, idx) => `
+    <tr>
+      <td><input type="text" class="inv-name" data-idx="${idx}" value="${escapeAttr(it.name)}" style="width:130px;"></td>
+      <td><input type="text" class="inv-category" data-idx="${idx}" value="${escapeAttr(it.category)}" style="width:90px;"></td>
+      <td><input type="number" class="inv-qty" data-idx="${idx}" value="${it.qty}" min="0" style="width:60px;"></td>
+      <td><input type="number" class="inv-cost" data-idx="${idx}" value="${it.cost}" min="0" style="width:80px;"></td>
+      <td><input type="number" class="inv-sell" data-idx="${idx}" value="${it.sell}" min="0" style="width:80px;"></td>
+      <td>
+        <button type="button" class="btn tiny danger inv-del" data-idx="${idx}">حذف</button>
+        <div style="font-size:11px; color:var(--muted); margin-top:3px;">${it.existingId ? 'منتج موجود' : 'منتج جديد'}</div>
+      </td>
+    </tr>
+  `).join('') || '<tr><td colspan="6" class="empty">لا يوجد أسطر - اضغط "+ إضافة سطر" لإضافة صنف يدويًا</td></tr>';
+}
+
+$('#invoice-review-list').addEventListener('input', (e) => {
+  const idx = e.target.dataset.idx;
+  if (idx === undefined) return;
+  const i = parseInt(idx);
+  if (!invoiceItems[i]) return;
+  if (e.target.classList.contains('inv-name')) invoiceItems[i].name = e.target.value;
+  else if (e.target.classList.contains('inv-category')) invoiceItems[i].category = e.target.value;
+  else if (e.target.classList.contains('inv-qty')) invoiceItems[i].qty = parseInt(e.target.value) || 0;
+  else if (e.target.classList.contains('inv-cost')) invoiceItems[i].cost = parseFloat(e.target.value) || 0;
+  else if (e.target.classList.contains('inv-sell')) invoiceItems[i].sell = parseFloat(e.target.value) || 0;
+});
+
+$('#invoice-review-list').addEventListener('click', (e) => {
+  const btn = e.target.closest('.inv-del');
+  if (!btn) return;
+  const idx = parseInt(btn.dataset.idx);
+  invoiceItems.splice(idx, 1);
+  renderInvoiceRows();
+});
+
+$('#invoice-add-row-btn').addEventListener('click', () => {
+  invoiceItems.push({ name: '', category: '', qty: 1, cost: 0, sell: 0, existingId: null });
+  renderInvoiceRows();
+  $('#invoice-review-wrap').style.display = 'block';
+});
+
+$('#invoice-commit-btn').addEventListener('click', async () => {
+  const validItems = invoiceItems.filter(it => (it.name || '').trim() && it.qty > 0);
+  const statusEl = $('#invoice-status');
+  if (!validItems.length) { statusEl.textContent = '⚠ ما في أسطر صالحة للحفظ (لازم اسم وكمية أكبر من صفر)'; return; }
+
+  const updateCost = $('#invoice-update-cost').checked;
+  const updateSell = $('#invoice-update-sell').checked;
+  statusEl.textContent = '⏳ عم يحفظ بالمخزون...';
+  $('#invoice-commit-btn').disabled = true;
+  try {
+    for (const it of validItems) {
+      const name = it.name.trim();
+      const existing = productsCache.find(p => p.name.trim().toLowerCase() === name.toLowerCase());
+      if (existing) {
+        const updateFields = { quantity: Number(existing.quantity || 0) + Number(it.qty) };
+        if (updateCost) updateFields.cost_price = it.cost;
+        if (updateSell) updateFields.sell_price = it.sell;
+        const { error } = await supabase.from('products').update(updateFields).eq('id', existing.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('products').insert({
+          branch_id: activeBranchId,
+          name,
+          category: it.category ? it.category.trim() : null,
+          cost_price: it.cost,
+          sell_price: it.sell || Math.round(it.cost * 1.2),
+          quantity: it.qty,
+          min_quantity: 3,
+        });
+        if (error) throw error;
+      }
+    }
+
+    await supabase.from('activity_log').insert({
+      branch_id: activeBranchId,
+      action_type: 'invoice_import',
+      description: `استيراد فاتورة بالذكاء الاصطناعي - ${validItems.length} صنف`,
+      amount: 0,
+      performed_by: currentProfile ? currentProfile.id : null,
+    });
+
+    statusEl.textContent = '✅ تم استيراد الفاتورة للمخزون بنجاح';
+    invoiceItems = [];
+    renderInvoiceRows();
+    $('#invoice-review-wrap').style.display = 'none';
+    $('#invoice-file-input').value = '';
+    await loadProducts();
+  } catch (err) {
+    statusEl.textContent = '❌ خطأ بالحفظ: ' + err.message;
+  } finally {
+    $('#invoice-commit-btn').disabled = false;
+  }
+});
 
 function escapeHtml(str) {
   const div = document.createElement('div');
