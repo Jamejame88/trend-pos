@@ -127,7 +127,7 @@
   /* نقطة البيع */
   .pos-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
   @media (min-width: 800px) {
-    .pos-grid { grid-template-columns: 1.3fr 1fr; }
+    .pos-grid { grid-template-columns: 1fr 1.3fr; }
   }
   #sale-search { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 10px; font-size: 15px; }
   .product-row {
@@ -181,6 +181,26 @@
     color: #6b5a1e;
     margin-bottom: 14px;
   }
+
+  .input-with-scan { display: flex; gap: 8px; margin-bottom: 10px; }
+  .input-with-scan input { flex: 1; margin-bottom: 0; }
+  .scanner-modal {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.75);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  .scanner-box {
+    background: var(--card);
+    border-radius: 14px;
+    padding: 14px;
+    width: 100%;
+    max-width: 420px;
+  }
+  #scanner-view { width: 100%; border-radius: 8px; overflow: hidden; }
 </style>
 </head>
 <body>
@@ -228,12 +248,7 @@
     <section id="tab-pos" class="tab-panel active">
       <div class="pos-grid">
         <div class="card">
-          <h2>المنتجات</h2>
-          <input type="text" id="sale-search" placeholder="بحث بالاسم / الباركود / التصنيف...">
-          <div id="sale-products-list"></div>
-        </div>
-        <div class="card">
-          <h2>السلة</h2>
+          <h2>تفاصيل البيع (السلة)</h2>
           <div id="cart-list"><p class="empty">السلة فاضية</p></div>
           <div class="totals-row"><span>المجموع الفرعي</span><span id="subtotal-display">0</span></div>
           <div class="totals-row">
@@ -248,6 +263,14 @@
           <div class="totals-row"><span>الباقي</span><span id="change-display">0</span></div>
           <button class="btn block" id="checkout-btn" style="margin-top:10px;">✔ إتمام عملية البيع</button>
         </div>
+        <div class="card">
+          <h2>المنتجات</h2>
+          <div class="input-with-scan">
+            <input type="text" id="sale-search" placeholder="بحث بالاسم / الباركود / التصنيف...">
+            <button type="button" class="btn secondary" id="scan-search-btn">📷 مسح</button>
+          </div>
+          <div id="sale-products-list"></div>
+        </div>
       </div>
     </section>
 
@@ -259,7 +282,12 @@
           <div class="form-grid">
             <div class="field"><label>اسم المنتج *</label><input type="text" id="product-name" required></div>
             <div class="field"><label>التصنيف</label><input type="text" id="product-category"></div>
-            <div class="field"><label>الباركود</label><input type="text" id="product-barcode"></div>
+            <div class="field"><label>الباركود</label>
+              <div class="input-with-scan">
+                <input type="text" id="product-barcode">
+                <button type="button" class="btn secondary tiny" id="scan-barcode-btn">📷</button>
+              </div>
+            </div>
             <div class="field"><label>سعر الشراء</label><input type="number" id="product-cost" value="0" min="0"></div>
             <div class="field"><label>سعر البيع *</label><input type="number" id="product-sell" required min="0"></div>
             <div class="field"><label>الكمية</label><input type="number" id="product-qty" value="0" min="0"></div>
@@ -321,6 +349,16 @@
   </main>
 </div>
 
+<!-- ==================== نافذة ماسح الباركود ==================== -->
+<div id="scanner-modal" class="scanner-modal">
+  <div class="scanner-box">
+    <h3 style="margin-top:0;">📷 وجّه الكاميرا نحو الباركود</h3>
+    <div id="scanner-view"></div>
+    <button type="button" class="btn secondary block" id="scanner-close-btn" style="margin-top:10px;">إغلاق الماسح</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <script type="module">
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
@@ -764,6 +802,52 @@ function actionLabel(t) {
     debt_payment: 'دفعة دين',
   }[t] || t;
 }
+
+// ---------------- ماسح الباركود بكاميرا الجوال ----------------
+let html5QrCode = null;
+let scannerTarget = null; // 'search' أو 'barcode'
+
+function openScanner(target) {
+  if (typeof Html5Qrcode === 'undefined') {
+    alert('مكتبة الماسح ما تحمّلت (تأكد من الاتصال بالإنترنت) - جرب تحدّث الصفحة.');
+    return;
+  }
+  scannerTarget = target;
+  $('#scanner-modal').style.display = 'flex';
+  html5QrCode = new Html5Qrcode('scanner-view');
+  html5QrCode.start(
+    { facingMode: 'environment' },
+    { fps: 10, qrbox: { width: 260, height: 160 } },
+    (decodedText) => onScanSuccess(decodedText),
+    () => {}
+  ).catch((err) => {
+    alert('ما قدرنا نفتح كاميرا الجوال. تأكد إنك موافق على إذن الكاميرا للموقع.\n' + err);
+    closeScanner();
+  });
+}
+
+function onScanSuccess(text) {
+  if (scannerTarget === 'search') {
+    $('#sale-search').value = text;
+    renderProductsForSale();
+  } else if (scannerTarget === 'barcode') {
+    $('#product-barcode').value = text;
+  }
+  closeScanner();
+}
+
+function closeScanner() {
+  $('#scanner-modal').style.display = 'none';
+  if (html5QrCode) {
+    const instance = html5QrCode;
+    html5QrCode = null;
+    instance.stop().then(() => instance.clear()).catch(() => {});
+  }
+}
+
+$('#scan-search-btn').addEventListener('click', () => openScanner('search'));
+$('#scan-barcode-btn').addEventListener('click', () => openScanner('barcode'));
+$('#scanner-close-btn').addEventListener('click', closeScanner);
 
 function escapeHtml(str) {
   const div = document.createElement('div');
