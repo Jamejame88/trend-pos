@@ -410,6 +410,12 @@
           </div>
         </div>
         <button class="btn secondary" id="report-lock-btn">🔒 إغلاق التقرير</button>
+
+        <div class="danger-zone">
+          <h3>⚠ منطقة خطر - ضبط المصنع</h3>
+          <p style="font-size:13px; margin-top:0;">هاد بيمسح كل بيانات <strong>الفرع الحالي فقط</strong> نهائيًا (منتجات، مبيعات، ديون، مرتجعات، سجل عمليات، وكلمة سر التقرير) - الفرع التاني ما يتأثر. ما فيك تتراجع بعدها.</p>
+          <button class="btn danger" id="factory-reset-btn">🗑 ضبط المصنع لهاد الفرع</button>
+        </div>
       </div>
     </section>
 
@@ -1068,6 +1074,29 @@ async function loadReportData() {
     <tr><td>${escapeHtml(cat)}</td><td>${v.qty}</td><td>${v.total.toFixed(0)}</td></tr>
   `).join('') || '<tr><td colspan="3">لا يوجد بيانات مبيعات بعد</td></tr>';
 }
+
+// ---------------- ضبط المصنع (صاحب المحل) ----------------
+$('#factory-reset-btn').addEventListener('click', async () => {
+  const branchName = (branches.find(b => b.id === activeBranchId) || {}).name || 'الفرع الحالي';
+  const ok1 = confirm(`متأكد تريد حذف كل بيانات "${branchName}" نهائيًا؟\n(منتجات، مبيعات، ديون، مرتجعات، سجل عمليات، كلمة سر التقرير)\nهاد الإجراء لا يمكن التراجع عنه!`);
+  if (!ok1) return;
+  const typed = prompt('للتأكيد النهائي، اكتب كلمة "متأكد" بالضبط:');
+  if (typed !== 'متأكد') { alert('اتلغى - النص ما طابق.'); return; }
+
+  const tables = ['sales', 'debts', 'returns', 'activity_log', 'products', 'settings'];
+  for (const t of tables) {
+    const { error } = await supabase.from(t).delete().eq('branch_id', activeBranchId);
+    if (error) { alert(`صار خطأ بحذف جدول ${t}: ` + error.message + '\nيمكن جزء من البيانات انحذف - راجع الفرع.'); return; }
+  }
+
+  alert('تم ضبط المصنع لهاد الفرع بنجاح ✅');
+  reportUnlocked = false;
+  $('#report-content').style.display = 'none';
+  $('#report-locked-card').style.display = 'block';
+  cart = [];
+  renderCart();
+  await refreshAll();
+});
 
 // ---------------- سجل العمليات (صاحب المحل) ----------------
 async function loadActivityLog() {
