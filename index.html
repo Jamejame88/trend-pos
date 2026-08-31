@@ -389,6 +389,18 @@
           <button type="button" class="btn block" id="invoice-commit-btn" style="margin-top:10px;">✔ تأكيد الاستيراد للمخزون</button>
         </div>
       </div>
+
+      <div class="card">
+        <h2>🔄 مزامنة المنتجات مع موقع TREND</h2>
+        <p style="font-size:13px; color:var(--muted); margin-top:0;">
+          بترسل منتجات "<span id="sync-branch-name">-</span>" (الفرع الحالي) لموقع الويب: بتحدّث الاسم/القسم/السعر/التوفّر بس،
+          وما بتلمس الصورة ولا حالة الظهور ولا الملاحظة. منتج جديد كليًا بينضاف "مخفي" لحد ما ترفعله صورة وتظهّرو من لوحة إدارة الموقع.
+          شغّلها مرة أو مرتين باليوم كحد أقصى (مو بعد كل عملية بيع).
+        </p>
+        <button type="button" class="btn secondary" id="sync-preview-btn">🔍 معاينة (بدون تعديل فعلي)</button>
+        <button type="button" class="btn" id="sync-now-btn">✅ مزامنة الآن</button>
+        <div id="sync-status" style="margin-top:10px; font-size:13px; line-height:1.7;"></div>
+      </div>
     </section>
 
     <!-- ---------- سجل المبيعات (صاحب المحل) ---------- -->
@@ -626,7 +638,9 @@ function renderMoveBranchPicker() {
   if (!targetSelect) return;
   const others = branches.filter(b => b.id !== activeBranchId);
   targetSelect.innerHTML = others.map(b => `<option value="${b.id}">${escapeHtml(b.name)}</option>`).join('') || '<option value="">لا يوجد فرع تاني</option>';
-  $('#move-from-branch-name').textContent = (branches.find(b => b.id === activeBranchId) || {}).name || '-';
+  const currentBranchName = (branches.find(b => b.id === activeBranchId) || {}).name || '-';
+  $('#move-from-branch-name').textContent = currentBranchName;
+  if ($('#sync-branch-name')) $('#sync-branch-name').textContent = currentBranchName;
 }
 
 $('#move-products-btn').addEventListener('click', async () => {
@@ -645,6 +659,57 @@ $('#move-products-btn').addEventListener('click', async () => {
 
   alert(`تم نقل ${count} منتج إلى "${toName}" بنجاح ✅`);
   await loadProducts();
+});
+
+// ---------------- مزامنة المنتجات مع موقع TREND ----------------
+async function runProductSync(dryRun) {
+  const statusEl = $('#sync-status');
+  if (!productsCache.length) { statusEl.textContent = 'ما في منتجات بهاد الفرع للمزامنة.'; return; }
+
+  statusEl.textContent = dryRun ? '⏳ عم يحضّر المعاينة...' : '⏳ عم يزامن مع الموقع...';
+  $('#sync-preview-btn').disabled = true;
+  $('#sync-now-btn').disabled = true;
+
+  const payload = productsCache.map(p => ({
+    code: p.id,
+    name: p.name,
+    category: p.category || '',
+    price: p.sell_price,
+    quantity: p.quantity,
+  }));
+
+  try {
+    const { data, error } = await supabase.functions.invoke('sync-products', { body: { products: payload, dryRun: !!dryRun } });
+    if (error) { statusEl.textContent = '❌ خطأ بالاتصال: ' + error.message; return; }
+    if (!data || !data.ok) { statusEl.textContent = '❌ ' + ((data && data.message) || 'فشلت العملية'); return; }
+
+    const addList = (data.addNames || []).slice(0, 15).map(escapeHtml).join('، ');
+    const updList = (data.updateNames || []).slice(0, 15).map(escapeHtml).join('، ');
+    const linkList = (data.linkNames || []).slice(0, 15).map(escapeHtml).join('، ');
+    const willLink = data.willLink || 0;
+
+    statusEl.innerHTML =
+      (dryRun ? '🔍 <b>معاينة فقط - ما انكتب أي شي على الموقع بعد:</b>' : '✅ <b>تمت المزامنة فعليًا:</b>') +
+      `<br>سيُضاف: <b>${data.willAdd}</b> منتج جديد` + (addList ? ' (' + addList + (data.willAdd > 15 ? '، ...' : '') + ')' : '') +
+      `<br>سيُحدَّث: <b>${data.willUpdate}</b> منتج موجود (مربوط أصلًا)` + (updList ? ' (' + updList + (data.willUpdate > 15 ? '، ...' : '') + ')' : '') +
+      (willLink
+        ? `<br>🔗 <b style="color:#b45309;">سيُربط بالاسم لأول مرة: ${willLink} منتج</b> - تأكد إنهم نفس المنتجات بالضبط بالموقع قبل ما تتابع` + (linkList ? ' (' + linkList + (willLink > 15 ? '، ...' : '') + ')' : '')
+        : '') +
+      (dryRun
+        ? '<br><br>إذا الأرقام منطقية، اضغط "مزامنة الآن" لتنفيذها فعليًا على الموقع.'
+        : '<br><br>تذكير: المنتجات الجديدة انضافت "مخفية" بالموقع - افتح لوحة إدارة الموقع وارفعلها صورة وظهّرها.');
+  } catch (err) {
+    statusEl.textContent = '❌ خطأ: ' + err.message;
+  } finally {
+    $('#sync-preview-btn').disabled = false;
+    $('#sync-now-btn').disabled = false;
+  }
+}
+
+$('#sync-preview-btn').addEventListener('click', () => runProductSync(true));
+$('#sync-now-btn').addEventListener('click', () => {
+  if (!confirm('متأكد بدك تزامن منتجات هاد الفرع فعليًا مع موقع TREND؟')) return;
+  runProductSync(false);
 });
 
 $('#logout-btn').addEventListener('click', async () => {
