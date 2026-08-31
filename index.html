@@ -287,6 +287,16 @@
       <div class="pos-grid">
         <div class="card">
           <h2>تفاصيل البيع (السلة)</h2>
+          <div style="border:1px dashed var(--border); border-radius:8px; padding:8px; margin-bottom:12px;">
+            <div style="font-size:13px; font-weight:600; margin-bottom:6px;">📸 تحليل فاتورة مبيعات (تعبئة السلة تلقائيًا)</div>
+            <input type="file" id="sale-invoice-file-input" accept="image/*" capture="environment" style="margin-bottom:6px; max-width:100%;">
+            <button type="button" class="btn secondary tiny" id="sale-invoice-analyze-btn">🤖 تحليل وتعبئة السلة</button>
+            <div id="sale-invoice-status" style="margin-top:6px; font-size:12px;"></div>
+            <div id="sale-invoice-unmatched-wrap" style="display:none; margin-top:8px;">
+              <div style="font-size:12px; color:var(--muted); margin-bottom:6px;">⚠ الأصناف التالية ما انطابقت مع منتج موجود بالاسم - اختار المنتج الصحيح لإضافتها للسلة:</div>
+              <div id="sale-invoice-unmatched-list"></div>
+            </div>
+          </div>
           <div id="cart-list"><p class="empty">السلة فاضية</p></div>
           <div class="totals-row"><span>المجموع الفرعي</span><span id="subtotal-display">0</span></div>
           <div class="totals-row">
@@ -837,6 +847,137 @@ $('#cart-list').addEventListener('click', (e) => {
   if (!btn) return;
   cart.splice(Number(btn.dataset.idx), 1);
   renderCart();
+});
+
+// ---------------- تحليل فاتورة مبيعات بالذكاء الاصطناعي (تعبئة السلة) ----------------
+let saleInvoiceUnmatched = [];
+
+function addInvoiceItemToCart(product, qty, price) {
+  qty = Math.max(1, parseInt(qty) || 1);
+  const unitPrice = price > 0 ? Number(price) : Number(product.sell_price);
+  const existing = cart.find(i => i.product_id === product.id);
+  if (existing) {
+    existing.qty += qty;
+    existing.subtotal = existing.qty * existing.price;
+  } else {
+    cart.push({
+      product_id: product.id, name: product.name,
+      price: unitPrice, cost: Number(product.cost_price || 0),
+      qty, subtotal: unitPrice * qty,
+    });
+  }
+  renderCart();
+}
+
+$('#sale-invoice-analyze-btn').addEventListener('click', async () => {
+  const fileInput = $('#sale-invoice-file-input');
+  const file = fileInput.files && fileInput.files[0];
+  const statusEl = $('#sale-invoice-status');
+  if (!file) { statusEl.textContent = '⚠ اختر صورة الفاتورة أولًا'; return; }
+
+  statusEl.textContent = '⏳ عم يحلل فاتورة المبيعات... ممكن ياخد شوي وقت';
+  $('#sale-invoice-analyze-btn').disabled = true;
+  try {
+    const base64 = await fileToBase64(file);
+    const { data, error } = await supabase.functions.invoke('import-invoice', {
+      body: { image: base64, mimeType: file.type || 'image/jpeg', mode: 'sale' },
+    });
+
+    if (error) {
+      statusEl.textContent = '❌ خطأ بالاتصال بخدمة التحليل: ' + error.message;
+      return;
+    }
+    if (data && data.error) {
+      statusEl.textContent = '❌ ' + data.error;
+      return;
+    }
+
+    const items = (data && data.items) || [];
+    if (items.length === 0) {
+      statusEl.textContent = '⚠ ما قدر يميّز أصناف بالصورة. جرب صورة أوضح، أو ضيف الأصناف يدويًا من قائمة المنتجات.';
+      return;
+    }
+
+    let addedCount = 0;
+    items.forEach((it) => {
+      const name = String(it.name || '').trim();
+      if (!name) return;
+      const qty = Math.max(1, parseInt(it.qty) || 1);
+      const price = parseFloat(it.price) || 0;
+      const existing = productsCache.find(p => p.name.trim().toLowerCase() === name.toLowerCase());
+      if (existing) {
+        addInvoiceItemToCart(existing, qty, price);
+        addedCount++;
+      } else {
+        saleInvoiceUnmatched.push({ tempId: 'u' + Math.random().toString(36).slice(2), name, qty, price });
+      }
+    });
+
+    renderSaleInvoiceUnmatched();
+
+    if (saleInvoiceUnmatched.length) {
+      statusEl.textContent = `✅ تمت إضافة ${addedCount} صنف للسلة. في ${saleInvoiceUnmatched.length} صنف ما انطابق مع منتج موجود - اختار المنتج الصحيح إله تحت.`;
+    } else if (addedCount) {
+      statusEl.textContent = `✅ تمت إضافة ${addedCount} صنف للسلة. راجع السلة واضغط "إتمام عملية البيع".`;
+    } else {
+      statusEl.textContent = '⚠ ما ضاف ولا صنف. جرب صورة أوضح.';
+    }
+    fileInput.value = '';
+  } catch (err) {
+    statusEl.textContent = '❌ خطأ: ' + err.message;
+  } finally {
+    $('#sale-invoice-analyze-btn').disabled = false;
+  }
+});
+
+function renderSaleInvoiceUnmatched() {
+  const wrap = $('#sale-invoice-unmatched-wrap');
+  const list = $('#sale-invoice-unmatched-list');
+  if (!saleInvoiceUnmatched.length) {
+    wrap.style.display = 'none';
+    list.innerHTML = '';
+    return;
+  }
+  wrap.style.display = 'block';
+  const options = productsCache.slice()
+    .sort((a, b) => a.name.localeCompare(b.name, 'ar'))
+    .map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+  list.innerHTML = saleInvoiceUnmatched.map((it) => `
+    <div class="unmatched-row" data-id="${it.tempId}" style="border:1px solid var(--border); border-radius:8px; padding:8px; margin-bottom:6px;">
+      <div style="font-size:13px; margin-bottom:6px;">⚠ "${escapeHtml(it.name)}" — ${it.qty} × ${it.price.toFixed(0)}</div>
+      <select class="unmatched-pick" style="width:100%; margin-bottom:6px;">
+        <option value="">-- اختر المنتج الصحيح --</option>
+        ${options}
+      </select>
+      <div style="display:flex; gap:6px;">
+        <button type="button" class="btn tiny unmatched-add">➕ إضافة للسلة</button>
+        <button type="button" class="btn tiny secondary unmatched-skip">تجاهل</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+$('#sale-invoice-unmatched-list').addEventListener('click', (e) => {
+  const row = e.target.closest('.unmatched-row');
+  if (!row) return;
+  const tempId = row.dataset.id;
+  const idx = saleInvoiceUnmatched.findIndex(u => u.tempId === tempId);
+  if (idx === -1) return;
+
+  if (e.target.closest('.unmatched-add')) {
+    const select = row.querySelector('.unmatched-pick');
+    const productId = select.value;
+    if (!productId) { alert('اختار منتج أولًا'); return; }
+    const product = productsCache.find(p => p.id === productId);
+    if (!product) return;
+    const item = saleInvoiceUnmatched[idx];
+    addInvoiceItemToCart(product, item.qty, item.price);
+    saleInvoiceUnmatched.splice(idx, 1);
+    renderSaleInvoiceUnmatched();
+  } else if (e.target.closest('.unmatched-skip')) {
+    saleInvoiceUnmatched.splice(idx, 1);
+    renderSaleInvoiceUnmatched();
+  }
 });
 
 function updateTotals() {
