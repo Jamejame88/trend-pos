@@ -321,7 +321,7 @@
     <!-- ---------- المنتجات (صاحب المحل) ---------- -->
     <section id="tab-products" class="tab-panel">
       <div class="card">
-        <h2>إضافة / تعديل منتج</h2>
+        <h2>➕ إضافة منتج جديد</h2>
         <form id="product-form">
           <div class="form-grid">
             <div class="field"><label>اسم المنتج *</label><input type="text" id="product-name" required></div>
@@ -980,6 +980,7 @@ $('#checkout-btn').addEventListener('click', async () => {
 
 // ---------------- إدارة المنتجات (صاحب المحل) ----------------
 let editingProductId = null;
+let inlineEditRowId = null; // id المنتج يلي عم يتعدّل حاليًا مباشرة بنفس سطر الجدول
 
 function renderProductsAdmin() {
   if (currentProfile.role !== 'owner') return;
@@ -991,9 +992,13 @@ function renderProductsAdmin() {
     (p.barcode || '').toLowerCase().includes(q) ||
     (p.category || '').toLowerCase().includes(q)
   );
-  $('#admin-products-list').innerHTML = visibleProducts.map(p => `
+  $('#admin-products-list').innerHTML = visibleProducts.map(p => {
+    const editing = p.id === inlineEditRowId;
+    return `
     <tr>
-      <td>${escapeHtml(p.name)}</td>
+      <td>${editing
+        ? `<input type="text" class="inline-name" value="${escapeAttr(p.name)}" style="width:100%; min-width:100px;">`
+        : escapeHtml(p.name)}</td>
       <td>
         <select class="inline-category-select" data-id="${p.id}" style="width:100%; min-width:110px;">
           <option value="" ${!p.category ? 'selected' : ''}>-- بدون تصنيف --</option>
@@ -1001,17 +1006,29 @@ function renderProductsAdmin() {
           <option value="__new__">+ تصنيف جديد...</option>
         </select>
       </td>
-      <td>${Number(p.cost_price).toFixed(0)}</td>
-      <td>${Number(p.sell_price).toFixed(0)}</td>
-      <td>${p.quantity}</td>
+      <td>${editing
+        ? `<input type="number" class="inline-cost" value="${Number(p.cost_price)}" min="0" style="width:100%; min-width:75px;">`
+        : Number(p.cost_price).toFixed(0)}</td>
+      <td>${editing
+        ? `<input type="number" class="inline-sell" value="${Number(p.sell_price)}" min="0" style="width:100%; min-width:75px;">`
+        : Number(p.sell_price).toFixed(0)}</td>
+      <td>${editing
+        ? `<input type="number" class="inline-qty" value="${Number(p.quantity)}" min="0" style="width:100%; min-width:65px;">`
+        : p.quantity}</td>
       <td>
-        <button class="btn tiny edit-product" data-id="${p.id}">تعديل</button>
-        <button class="btn tiny danger delete-product" data-id="${p.id}">حذف</button>
-        ${!p.barcode ? `<button class="btn tiny secondary scan-row-barcode" data-id="${p.id}">📷 باركود</button>` : ''}
-        <button class="btn tiny secondary upload-image-btn" data-id="${p.id}" data-name="${escapeAttr(p.name)}">🖼️ صورة للموقع</button>
+        ${editing ? `
+          <button class="btn tiny save-inline-btn" data-id="${p.id}">💾 حفظ</button>
+          <button class="btn tiny secondary cancel-inline-btn" data-id="${p.id}">إلغاء</button>
+        ` : `
+          <button class="btn tiny edit-product" data-id="${p.id}">تعديل</button>
+          <button class="btn tiny danger delete-product" data-id="${p.id}">حذف</button>
+          ${!p.barcode ? `<button class="btn tiny secondary scan-row-barcode" data-id="${p.id}">📷 باركود</button>` : ''}
+          <button class="btn tiny secondary upload-image-btn" data-id="${p.id}" data-name="${escapeAttr(p.name)}">🖼️ صورة للموقع</button>
+        `}
       </td>
     </tr>
-  `).join('') || `<tr><td colspan="6">${q ? 'لا يوجد منتجات مطابقة للبحث' : 'لا يوجد منتجات'}</td></tr>`;
+  `;
+  }).join('') || `<tr><td colspan="6">${q ? 'لا يوجد منتجات مطابقة للبحث' : 'لا يوجد منتجات'}</td></tr>`;
 }
 
 $('#admin-products-search').addEventListener('input', renderProductsAdmin);
@@ -1040,8 +1057,34 @@ $('#admin-products-list').addEventListener('click', async (e) => {
   const delBtn = e.target.closest('.delete-product');
   const scanRowBtn = e.target.closest('.scan-row-barcode');
   const imgBtn = e.target.closest('.upload-image-btn');
+  const saveInlineBtn = e.target.closest('.save-inline-btn');
+  const cancelInlineBtn = e.target.closest('.cancel-inline-btn');
+
   if (editBtn) {
-    fillProductForm(productsCache.find(p => p.id === editBtn.dataset.id));
+    inlineEditRowId = editBtn.dataset.id;
+    renderProductsAdmin();
+    const row = $(`.inline-name`);
+    if (row) { row.focus(); row.select(); }
+  }
+  if (cancelInlineBtn) {
+    inlineEditRowId = null;
+    renderProductsAdmin();
+  }
+  if (saveInlineBtn) {
+    const tr = saveInlineBtn.closest('tr');
+    const id = saveInlineBtn.dataset.id;
+    const name = tr.querySelector('.inline-name').value.trim();
+    const cost = parseFloat(tr.querySelector('.inline-cost').value || 0);
+    const sell = parseFloat(tr.querySelector('.inline-sell').value || 0);
+    const qty  = parseInt(tr.querySelector('.inline-qty').value || 0, 10);
+    if (!name) { alert('اسم المنتج ما فيه يضل فاضي'); return; }
+    if (!sell) { alert('سعر البيع لازم يكون أكبر من صفر'); return; }
+    const { error } = await supabase.from('products').update({
+      name, cost_price: cost, sell_price: sell, quantity: qty,
+    }).eq('id', id);
+    if (error) { alert('خطأ بالحفظ: ' + error.message); return; }
+    inlineEditRowId = null;
+    await loadProducts();
   }
   if (delBtn) {
     if (!confirm('حذف هاد المنتج نهائيًا؟')) return;
