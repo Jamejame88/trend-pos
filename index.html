@@ -131,7 +131,7 @@
   @media (min-width: 800px) {
     .pos-grid { grid-template-columns: 1fr 1.3fr; }
   }
-  #sale-search { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 10px; font-size: 15px; }
+  #sale-search, #admin-products-search { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 10px; font-size: 15px; }
   .product-row {
     display: flex;
     align-items: center;
@@ -343,6 +343,7 @@
       </div>
       <div class="card">
         <h2>قائمة المنتجات (الفرع الحالي)</h2>
+        <input type="text" id="admin-products-search" placeholder="🔍 بحث بالاسم / الباركود / التصنيف...">
         <div style="overflow-x:auto;">
           <table>
             <thead><tr><th>الاسم</th><th>التصنيف</th><th>سعر الشراء</th><th>سعر البيع</th><th>الكمية</th><th></th></tr></thead>
@@ -981,7 +982,13 @@ function renderProductsAdmin() {
   if (currentProfile.role !== 'owner') return;
   const allCategories = [...new Set(productsCache.map(p => (p.category || '').trim()).filter(Boolean))]
     .sort((a, b) => a.localeCompare('ar'));
-  $('#admin-products-list').innerHTML = productsCache.map(p => `
+  const q = ($('#admin-products-search')?.value || '').trim().toLowerCase();
+  const visibleProducts = !q ? productsCache : productsCache.filter(p =>
+    p.name.toLowerCase().includes(q) ||
+    (p.barcode || '').toLowerCase().includes(q) ||
+    (p.category || '').toLowerCase().includes(q)
+  );
+  $('#admin-products-list').innerHTML = visibleProducts.map(p => `
     <tr>
       <td>${escapeHtml(p.name)}</td>
       <td>
@@ -1000,8 +1007,10 @@ function renderProductsAdmin() {
         ${!p.barcode ? `<button class="btn tiny secondary scan-row-barcode" data-id="${p.id}">📷 باركود</button>` : ''}
       </td>
     </tr>
-  `).join('') || '<tr><td colspan="6">لا يوجد منتجات</td></tr>';
+  `).join('') || `<tr><td colspan="6">${q ? 'لا يوجد منتجات مطابقة للبحث' : 'لا يوجد منتجات'}</td></tr>`;
 }
+
+$('#admin-products-search').addEventListener('input', renderProductsAdmin);
 
 $('#admin-products-list').addEventListener('change', async (e) => {
   const sel = e.target.closest('.inline-category-select');
