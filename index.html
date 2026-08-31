@@ -280,6 +280,7 @@
     <button class="tab-btn owner-only" data-tab="returns">المرتجعات</button>
     <button class="tab-btn owner-only" data-tab="report">التقرير 🔒</button>
     <button class="tab-btn owner-only" data-tab="log">سجل العمليات</button>
+    <button class="tab-btn owner-only" data-tab="employees">الموظفين</button>
   </nav>
 
   <main>
@@ -608,6 +609,37 @@
         </div>
       </div>
     </section>
+
+    <!-- ---------- الموظفين (صاحب المحل) ---------- -->
+    <section id="tab-employees" class="tab-panel">
+      <div class="card">
+        <h2>➕ إنشاء حساب موظف جديد</h2>
+        <div class="form-grid">
+          <div class="field"><label>اسم المستخدم (للدخول) *</label><input type="text" id="emp-username" placeholder="بالإنكليزي، بدون مسافات - مثلاً: sara"></div>
+          <div class="field"><label>الاسم الكامل</label><input type="text" id="emp-fullname"></div>
+          <div class="field"><label>كلمة السر *</label><input type="text" id="emp-password" placeholder="٦ أحرف/أرقام ع الأقل"></div>
+          <div class="field"><label>الفرع</label><select id="emp-branch"></select></div>
+          <div class="field">
+            <label>الصلاحية</label>
+            <select id="emp-role">
+              <option value="employee">موظف</option>
+              <option value="owner">صاحب محل</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn" id="add-employee-btn">💾 إنشاء الحساب</button>
+        <div id="employee-status" style="margin-top:8px; font-size:13px;"></div>
+      </div>
+      <div class="card">
+        <h2>الموظفين الحاليين</h2>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead><tr><th>اسم المستخدم</th><th>الاسم الكامل</th><th>الصلاحية</th><th>الفرع</th><th></th></tr></thead>
+            <tbody id="employees-list"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
   </main>
 </div>
 
@@ -704,6 +736,7 @@ function setupUIForRole() {
     picker.value = activeBranchId;
     $$('.owner-only').forEach(el => el.style.display = '');
     renderMoveBranchPicker();
+    renderEmployeeBranchPicker();
   } else {
     picker.style.display = 'none';
     $$('.owner-only').forEach(el => el.style.display = 'none');
@@ -725,6 +758,14 @@ function renderMoveBranchPicker() {
   const currentBranchName = (branches.find(b => b.id === activeBranchId) || {}).name || '-';
   $('#move-from-branch-name').textContent = currentBranchName;
   if ($('#sync-branch-name')) $('#sync-branch-name').textContent = currentBranchName;
+}
+
+function renderEmployeeBranchPicker() {
+  const sel = $('#emp-branch');
+  if (!sel) return;
+  const currentVal = sel.value;
+  sel.innerHTML = branches.map(b => `<option value="${b.id}">${escapeHtml(b.name)}</option>`).join('') || '<option value="">لا يوجد فروع</option>';
+  if (currentVal && branches.some(b => b.id === currentVal)) sel.value = currentVal;
 }
 
 $('#move-products-btn').addEventListener('click', async () => {
@@ -823,6 +864,7 @@ async function refreshAll() {
     await loadSupplierReturnProductPicker();
     await loadReturns();
     await loadActivityLog();
+    await loadEmployees();
     if (reportUnlocked) await loadReportData();
   }
 }
@@ -2103,6 +2145,82 @@ function actionLabel(t) {
     debt_payment: 'دفعة دين',
   }[t] || t;
 }
+
+// ---------------- الموظفين (صاحب المحل) ----------------
+let employeesCache = [];
+
+async function loadEmployees() {
+  if (!currentProfile || currentProfile.role !== 'owner') return;
+  const { data, error } = await supabase.from('profiles').select('*').order('username');
+  if (error) { console.error(error); return; }
+  employeesCache = data || [];
+  renderEmployees();
+}
+
+function renderEmployees() {
+  const list = $('#employees-list');
+  if (!list) return;
+  list.innerHTML = employeesCache.map(e => {
+    const branchName = (branches.find(b => b.id === e.branch_id) || {}).name || '-';
+    return `
+    <tr>
+      <td>${escapeHtml(e.username)}</td>
+      <td>${escapeHtml(e.full_name || '-')}</td>
+      <td>${e.role === 'owner' ? 'صاحب محل' : 'موظف'}</td>
+      <td>${escapeHtml(branchName)}</td>
+      <td><button class="btn tiny secondary reset-password-btn" data-id="${e.id}" data-username="${escapeAttr(e.username)}">🔑 تغيير كلمة السر</button></td>
+    </tr>
+  `;
+  }).join('') || '<tr><td colspan="5">لا يوجد موظفين بعد</td></tr>';
+}
+
+$('#add-employee-btn').addEventListener('click', async () => {
+  const username = $('#emp-username').value.trim();
+  const full_name = $('#emp-fullname').value.trim();
+  const password = $('#emp-password').value;
+  const branch_id = $('#emp-branch').value;
+  const role = $('#emp-role').value;
+  const statusEl = $('#employee-status');
+
+  if (!username || !password) { statusEl.textContent = '⚠ اسم المستخدم وكلمة السر لازم يكونوا مكتوبين'; return; }
+  if (password.length < 6) { statusEl.textContent = '⚠ كلمة السر لازم تكون ٦ أحرف/أرقام ع الأقل'; return; }
+  if (/\s/.test(username)) { statusEl.textContent = '⚠ اسم المستخدم ما لازم يحتوي مسافات'; return; }
+
+  statusEl.textContent = '⏳ عم ينشئ الحساب...';
+  $('#add-employee-btn').disabled = true;
+  try {
+    const { data, error } = await supabase.functions.invoke('manage-employees', {
+      body: { action: 'create_employee', username, password, full_name, role, branch_id },
+    });
+    if (error) { statusEl.textContent = '❌ خطأ بالاتصال: ' + error.message; return; }
+    if (!data || !data.ok) { statusEl.textContent = '❌ ' + ((data && data.message) || 'فشل إنشاء الحساب'); return; }
+
+    statusEl.textContent = `✅ تم إنشاء حساب "${username}" بنجاح - عطيه اسم المستخدم وكلمة السر يستخدمهم لدخول نقطة البيع.`;
+    $('#emp-username').value = '';
+    $('#emp-fullname').value = '';
+    $('#emp-password').value = '';
+    await loadEmployees();
+  } catch (err) {
+    statusEl.textContent = '❌ خطأ: ' + err.message;
+  } finally {
+    $('#add-employee-btn').disabled = false;
+  }
+});
+
+$('#employees-list').addEventListener('click', async (e) => {
+  const btn = e.target.closest('.reset-password-btn');
+  if (!btn) return;
+  const newPassword = prompt(`كلمة السر الجديدة لـ "${btn.dataset.username}" (٦ أحرف/أرقام ع الأقل):`);
+  if (!newPassword) return;
+  if (newPassword.length < 6) { alert('كلمة السر لازم تكون ٦ أحرف/أرقام ع الأقل'); return; }
+
+  const { data, error } = await supabase.functions.invoke('manage-employees', {
+    body: { action: 'reset_password', user_id: btn.dataset.id, new_password: newPassword },
+  });
+  if (error) { alert('❌ خطأ بالاتصال: ' + error.message); return; }
+  if (!data || !data.ok) { alert('❌ ' + ((data && data.message) || 'فشل تغيير كلمة السر')); return; }
+  alert(`✅ تم تغيير كلمة سر "${btn.dataset.username}" بنجاح`);
+});
 
 // ---------------- ماسح الباركود بكاميرا الجوال ----------------
 let html5QrCode = null;
