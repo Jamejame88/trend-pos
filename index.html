@@ -145,13 +145,22 @@
 
   .cart-row {
     display: grid;
-    grid-template-columns: 1fr auto auto auto;
+    grid-template-columns: 1fr auto auto auto auto;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     padding: 8px 4px;
     border-bottom: 1px solid var(--border);
     font-size: 13px;
   }
+  .cart-price-input {
+    width: 62px;
+    padding: 5px 2px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    text-align: center;
+    font-size: 13px;
+  }
+  .cart-price-input.price-overridden { border-color: var(--green); color: var(--green); font-weight: bold; }
   .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 12px; }
 
   .totals-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 14px; }
@@ -965,19 +974,40 @@ function addToCart(productId) {
   } else {
     cart.push({
       product_id: product.id, name: product.name,
-      price: Number(product.sell_price), cost: Number(product.cost_price || 0),
+      price: Number(product.sell_price), basePrice: Number(product.sell_price), cost: Number(product.cost_price || 0),
       qty: 1, subtotal: Number(product.sell_price),
     });
   }
   renderCart();
 }
 
+// بدّل سعر صنف موجود بالسلة (مثلاً هدية بتنباع اليوم بأكتر من تسعيرتها المسجّلة) -
+// هاد التعديل لهاي الفاتورة بس، ما بيغيّر سعر المنتج بالمخزون. لما نرفع السعر هون،
+// الفرق بينعكس تلقائيًا بالأرباح لأنه حساب الربح بالتقارير معتمد على المبلغ الفعلي
+// المقبوض (subtotal/total) مطروح منه التكلفة - مش على السعر المسجّل بالمخزون.
+function updateCartItemPrice(idx, newPrice) {
+  const item = cart[idx];
+  if (!item) return;
+  let price = parseFloat(newPrice);
+  if (isNaN(price) || price < 0) price = 0;
+  item.price = price;
+  item.subtotal = item.qty * item.price;
+  const subtotalEl = document.getElementById(`cart-item-subtotal-${idx}`);
+  if (subtotalEl) subtotalEl.textContent = item.subtotal.toFixed(0);
+  const inputEl = document.getElementById(`cart-item-price-${idx}`);
+  if (inputEl) inputEl.classList.toggle('price-overridden', item.price !== item.basePrice);
+  updateTotals();
+}
+
 function renderCart() {
   $('#cart-list').innerHTML = cart.map((item, idx) => `
     <div class="cart-row">
       <span>${escapeHtml(item.name)}</span>
-      <span>${item.qty} × ${item.price.toFixed(0)}</span>
-      <span>${item.subtotal.toFixed(0)}</span>
+      <span>${item.qty} ×</span>
+      <input type="number" class="cart-price-input${item.price !== item.basePrice ? ' price-overridden' : ''}"
+        id="cart-item-price-${idx}" data-idx="${idx}" value="${item.price}" min="0" step="1"
+        title="سعر البيع لهاي الفاتورة بس (متل هدية بتنباع اليوم بأكتر من سعرها المسجّل) - ما بيغيّر سعر المنتج بالمخزون">
+      <span id="cart-item-subtotal-${idx}">${item.subtotal.toFixed(0)}</span>
       <button class="btn tiny danger remove-item" data-idx="${idx}">✕</button>
     </div>
   `).join('') || '<p class="empty">السلة فاضية</p>';
@@ -989,6 +1019,12 @@ $('#cart-list').addEventListener('click', (e) => {
   if (!btn) return;
   cart.splice(Number(btn.dataset.idx), 1);
   renderCart();
+});
+
+$('#cart-list').addEventListener('input', (e) => {
+  const input = e.target.closest('.cart-price-input');
+  if (!input) return;
+  updateCartItemPrice(Number(input.dataset.idx), input.value);
 });
 
 // ---------------- تحليل فاتورة مبيعات بالذكاء الاصطناعي (تعبئة السلة) ----------------
@@ -1004,7 +1040,7 @@ function addInvoiceItemToCart(product, qty, price) {
   } else {
     cart.push({
       product_id: product.id, name: product.name,
-      price: unitPrice, cost: Number(product.cost_price || 0),
+      price: unitPrice, basePrice: Number(product.sell_price), cost: Number(product.cost_price || 0),
       qty, subtotal: unitPrice * qty,
     });
   }
