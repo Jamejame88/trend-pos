@@ -533,6 +533,34 @@
       </div>
       <div id="report-content" style="display:none;">
         <div class="card">
+          <h2>📅 التقرير اليومي</h2>
+          <p style="font-size:12px; color:var(--muted); margin-top:0;">التكلفة والربح هون تقديريان (محسوبان على سعر الشراء الحالي بالنظام، مو سعر الشراء وقت البيع فعليًا لو كان تغيّر).</p>
+          <div class="form-grid">
+            <div class="field"><label>اليوم</label><input type="date" id="daily-report-date"></div>
+          </div>
+          <button type="button" class="btn secondary tiny" id="daily-report-refresh-btn">🔄 تحديث</button>
+          <div class="form-grid" style="margin-top:10px;">
+            <div>عدد الفواتير: <strong id="daily-invoice-count">0</strong></div>
+            <div>إجمالي المبيعات: <strong id="daily-total-sales">0</strong></div>
+            <div>إجمالي التكلفة (تقديري): <strong id="daily-total-cost">0</strong></div>
+            <div>الربح (هامش البيع): <strong id="daily-gross-profit">0</strong></div>
+            <div>مصاريف اليوم: <strong id="daily-expenses">0</strong></div>
+            <div>الربح الصافي التقديري لليوم: <strong id="daily-net-profit">0</strong></div>
+          </div>
+          <div style="overflow-x:auto; margin-top:12px;">
+            <table>
+              <thead><tr><th>الموظف</th><th>عدد الفواتير</th><th>المبيعات</th></tr></thead>
+              <tbody id="daily-by-cashier"></tbody>
+            </table>
+          </div>
+          <div style="overflow-x:auto; margin-top:12px;">
+            <table>
+              <thead><tr><th>المنتج</th><th>الكمية المباعة</th><th>الإجمالي</th></tr></thead>
+              <tbody id="daily-by-product"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
           <h2>💰 قيمة المخزون والربح المتوقع (الفرع الحالي)</h2>
           <div class="form-grid">
             <div>عدد المنتجات: <strong id="report-product-count">0</strong></div>
@@ -865,7 +893,7 @@ async function refreshAll() {
     await loadReturns();
     await loadActivityLog();
     await loadEmployees();
-    if (reportUnlocked) await loadReportData();
+    if (reportUnlocked) { await loadReportData(); await loadDailyReport(); }
   }
 }
 
@@ -1965,6 +1993,7 @@ async function unlockReport() {
   $('#report-locked-card').style.display = 'none';
   $('#report-content').style.display = 'block';
   await loadReportData();
+  await loadDailyReport();
 }
 
 $('#report-lock-btn').addEventListener('click', () => {
@@ -1972,6 +2001,103 @@ $('#report-lock-btn').addEventListener('click', () => {
   $('#report-content').style.display = 'none';
   $('#report-locked-card').style.display = 'block';
 });
+
+// ---------------- التقرير اليومي (صاحب المحل) ----------------
+function todayLocalDateStr() {
+  const d = new Date();
+  const tzOffsetMs = d.getTimezoneOffset() * 60000;
+  return new Date(d.getTime() - tzOffsetMs).toISOString().slice(0, 10);
+}
+
+function dayBoundsISO(dateStr) {
+  const start = new Date(dateStr + 'T00:00:00');
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  return { startISO: start.toISOString(), endISO: end.toISOString() };
+}
+
+async function loadDailyReport() {
+  const dateInput = $('#daily-report-date');
+  if (!dateInput.value) dateInput.value = todayLocalDateStr();
+  const { startISO, endISO } = dayBoundsISO(dateInput.value);
+
+  // فواتير اليوم المكتملة (الفرع الحالي)
+  const { data: salesRows, error: salesErr } = await supabase
+    .from('sales')
+    .select('id, total, sold_by')
+    .eq('branch_id', activeBranchId)
+    .eq('status', 'completed')
+    .gte('sale_date', startISO)
+    .lt('sale_date', endISO);
+  if (salesErr) { console.error(salesErr); return; }
+
+  const invoiceCount = (salesRows || []).length;
+  const totalSales = (salesRows || []).reduce((s, r) => s + Number(r.total), 0);
+  $('#daily-invoice-count').textContent = invoiceCount;
+  $('#daily-total-sales').textContent = totalSales.toFixed(0);
+
+  // تفصيل الأصناف المباعة اليوم + تكلفتها التقديرية (بسعر الشراء الحالي بالنظام)
+  const { data: itemRows, error: itemsErr } = await supabase
+    .from('sale_items')
+    .select('product_name, quantity, subtotal, products(cost_price), sales!inner(branch_id, status, sale_date)')
+    .eq('sales.branch_id', activeBranchId)
+    .eq('sales.status', 'completed')
+    .gte('sales.sale_date', startISO)
+    .lt('sales.sale_date', endISO);
+
+  let totalCost = 0;
+  const byProduct = {};
+  if (!itemsErr) {
+    (itemRows || []).forEach((it) => {
+      const cost = (it.products && Number(it.products.cost_price)) || 0;
+      totalCost += cost * Number(it.quantity);
+      if (!byProduct[it.product_name]) byProduct[it.product_name] = { qty: 0, total: 0 };
+      byProduct[it.product_name].qty += Number(it.quantity);
+      byProduct[it.product_name].total += Number(it.subtotal);
+    });
+  }
+  $('#daily-total-cost').textContent = totalCost.toFixed(0);
+  const grossProfit = totalSales - totalCost;
+  $('#daily-gross-profit').textContent = grossProfit.toFixed(0);
+
+  $('#daily-by-product').innerHTML = Object.entries(byProduct)
+    .sort((a, b) => b[1].total - a[1].total)
+    .map(([name, v]) => `<tr><td>${escapeHtml(name)}</td><td>${v.qty}</td><td>${v.total.toFixed(0)}</td></tr>`)
+    .join('') || '<tr><td colspan="3">لا يوجد مبيعات بهاد اليوم</td></tr>';
+
+  // مصاريف اليوم (لو جدول المصاريف موجود أصلًا عند المستخدم)
+  const { data: expenseRows, error: expErr } = await supabase
+    .from('expenses')
+    .select('amount')
+    .eq('branch_id', activeBranchId)
+    .gte('expense_date', startISO)
+    .lt('expense_date', endISO);
+  const dayExpenses = expErr ? 0 : (expenseRows || []).reduce((s, e) => s + Number(e.amount), 0);
+  $('#daily-expenses').textContent = dayExpenses.toFixed(0);
+  $('#daily-net-profit').textContent = (grossProfit - dayExpenses).toFixed(0);
+
+  // أداء كل كاشير بهاد اليوم بس
+  const bySold = {};
+  (salesRows || []).forEach((s) => {
+    const key = s.sold_by || 'غير معروف';
+    if (!bySold[key]) bySold[key] = { count: 0, total: 0 };
+    bySold[key].count += 1;
+    bySold[key].total += Number(s.total);
+  });
+  const soldByIds = Object.keys(bySold).filter(k => k !== 'غير معروف');
+  let namesMap = {};
+  if (soldByIds.length) {
+    const { data: profs } = await supabase.from('profiles').select('id, full_name, username').in('id', soldByIds);
+    (profs || []).forEach(p => { namesMap[p.id] = p.full_name || p.username || p.id; });
+  }
+  $('#daily-by-cashier').innerHTML = Object.entries(bySold)
+    .sort((a, b) => b[1].total - a[1].total)
+    .map(([id, v]) => `<tr><td>${escapeHtml(namesMap[id] || 'غير معروف')}</td><td>${v.count}</td><td>${v.total.toFixed(0)}</td></tr>`)
+    .join('') || '<tr><td colspan="3">لا يوجد مبيعات بهاد اليوم</td></tr>';
+}
+
+$('#daily-report-refresh-btn').addEventListener('click', loadDailyReport);
+$('#daily-report-date').addEventListener('change', loadDailyReport);
 
 async function loadReportData() {
   const cost_value = productsCache.reduce((s, p) => s + Number(p.cost_price) * p.quantity, 0);
