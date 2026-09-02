@@ -72,6 +72,7 @@
   .btn.danger { background: var(--red); }
   .btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .btn.chip { padding: 6px 14px; border-radius: 20px; font-size: 13px; background: #e3e6ea; color: #333; }
+  .upload-image-btn.has-image { box-shadow: 0 0 0 2px var(--green) inset; }
   .btn.chip.active { background: var(--green); color: #fff; }
   .error-text { color: var(--red); font-size: 13px; margin-top: 8px; min-height: 18px; }
 
@@ -382,7 +383,9 @@
         </div>
         <input type="file" id="product-image-file" accept="image/*" multiple hidden>
         <p id="product-image-status" style="font-size:13px; color:var(--muted); margin-top:8px;"></p>
-        <p style="font-size:12px; color:var(--muted); margin-top:4px;">زر "🖼️ صورة للموقع" بيرفع الصورة/الصور مباشرة لموقع TREND ويظهّر المنتج فورًا - لازم تكون عملت "مزامنة" للمنتج مرة قبل هيك (بتبويب الأسفل).</p>
+        <p style="font-size:12px; color:var(--muted); margin-top:4px;">زر "🖼️ صورة للموقع" بيرفع الصورة/الصور مباشرة لموقع TREND ويظهّر المنتج فورًا - لازم تكون عملت "مزامنة" للمنتج مرة قبل هيك (بتبويب الأسفل). زر مؤطّر بالأخضر = مرفوعة له صورة على الموقع.</p>
+        <button type="button" class="btn secondary tiny" id="check-web-images-btn" style="margin-top:8px;">🔄 تحقق من الصور الموجودة فعليًا على الموقع</button>
+        <p id="check-web-images-status" style="font-size:12px; color:var(--muted); margin-top:6px;"></p>
       </div>
 
       <div class="card">
@@ -1504,7 +1507,7 @@ function renderProductsAdmin() {
           <button class="btn tiny edit-product" data-id="${p.id}">تعديل</button>
           <button class="btn tiny danger delete-product" data-id="${p.id}">حذف</button>
           ${!p.barcode ? `<button class="btn tiny secondary scan-row-barcode" data-id="${p.id}">📷 باركود</button>` : ''}
-          <button class="btn tiny secondary upload-image-btn" data-id="${p.id}" data-name="${escapeAttr(p.name)}">🖼️ صورة للموقع</button>
+          <button class="btn tiny secondary upload-image-btn${p.has_web_image ? ' has-image' : ''}" data-id="${p.id}" data-name="${escapeAttr(p.name)}" title="${p.has_web_image ? 'مرفوعة صورة لهاد المنتج على الموقع' : 'ما في صورة مرفوعة لهاد المنتج على الموقع لسا'}">🖼️ صورة للموقع</button>
         `}
       </td>
     </tr>
@@ -1656,6 +1659,7 @@ $('#product-image-file').addEventListener('change', async function () {
       return;
     }
     statusEl.textContent = `✅ تم رفع ${urls.length} صورة لمنتج "${name}" وصار ظاهر على الموقع.`;
+    await markProductHasWebImage(id, true);
   } catch (err) {
     statusEl.textContent = '❌ خطأ: ' + err.message;
   } finally {
@@ -1663,6 +1667,20 @@ $('#product-image-file').addEventListener('change', async function () {
     pendingImageProduct = null;
   }
 });
+
+// بعد نجاح رفع صورة (من هون أو من الرفع بالدفعة تحت)، نسجّل بقاعدة البيانات إنه
+// هاد المنتج صار عنده صورة على الموقع - عشان زر "صورة للموقع" يتأطّر بالأخضر
+// تلقائيًا بأي مرة نفتح فيها تبويب المنتجات، من غير ما نحتاج نتحقق من الموقع كل مرة.
+async function markProductHasWebImage(productId, value) {
+  try {
+    await supabase.from('products').update({ has_web_image: value }).eq('id', productId);
+    const p = productsCache.find(x => x.id === productId);
+    if (p) p.has_web_image = value;
+    renderProductsAdmin();
+  } catch (err) {
+    console.error('تعذر تحديث حالة الصورة محليًا:', err);
+  }
+}
 
 // ---------------- رفع صور دفعة وحدة بالرقم المتسلسل (اسم الملف = رقم المنتج) ----------------
 function parseSerialFromFilename(filename) {
@@ -1723,6 +1741,7 @@ $('#bulk-image-upload-btn').addEventListener('click', async () => {
         results.push(`❌ رقم ${num} (${product.name}): انرفعت الصورة بس فشل ربطها بالموقع - ${(data && data.message) || (error && error.message) || ''}`);
       } else {
         results.push(`✅ رقم ${num} (${product.name}): تم ربط ${urls.length} صورة وصار ظاهر بالموقع`);
+        await markProductHasWebImage(product.id, true);
       }
     } catch (err) {
       results.push(`❌ رقم ${num} (${product.name}): خطأ بالربط - ${err.message}`);
@@ -1735,6 +1754,38 @@ $('#bulk-image-upload-btn').addEventListener('click', async () => {
   }
   statusEl.textContent = results.join('\n');
   $('#bulk-image-input').value = '';
+});
+
+// ---------------- تحقق فعلي (مرة وحدة عند الطلب) من الصور الموجودة أصلًا على الموقع ----------------
+// مفيدة أول مرة نستخدم فيها ميزة "زر مؤطّر بالأخضر" - لأنه المنتجات يلي رفعنالها
+// صور من قبل هاد التاريخ ما كان في تسجيل محلي لهيك بقاعدة بيانات نقطة البيع
+// (الصورة كانت بتنحفظ بشيت الموقع بس). هاد الزر بيسأل الموقع فعليًا "شو المنتجات
+// يلي عندها صورة حاليًا؟" ويصحّح حالة كل منتج بالفرع الحالي مرة وحدة.
+$('#check-web-images-btn').addEventListener('click', async () => {
+  const statusEl = $('#check-web-images-status');
+  statusEl.textContent = '⏳ عم يتحقق من الموقع...';
+  try {
+    const { data, error } = await supabase.functions.invoke('sync-products', { body: { action: 'imageStatus' } });
+    if (error || !data || !data.ok) {
+      statusEl.textContent = '❌ ' + ((data && data.message) || (error && error.message) || 'فشل التحقق - تأكد إنه دالة sync-products محدّثة لآخر نسخة');
+      return;
+    }
+    const codesWithImage = new Set(data.codes || []);
+    const trueIds = productsCache.filter(p => codesWithImage.has(p.id) && !p.has_web_image).map(p => p.id);
+    const falseIds = productsCache.filter(p => !codesWithImage.has(p.id) && p.has_web_image).map(p => p.id);
+
+    if (trueIds.length) await supabase.from('products').update({ has_web_image: true }).in('id', trueIds);
+    if (falseIds.length) await supabase.from('products').update({ has_web_image: false }).in('id', falseIds);
+
+    productsCache.forEach(p => { p.has_web_image = codesWithImage.has(p.id); });
+    const changed = trueIds.length + falseIds.length;
+    statusEl.textContent = changed
+      ? `✅ تم التحقق - اتحدّثت حالة ${changed} منتج من أصل ${productsCache.length}.`
+      : `✅ تم التحقق - كل شي مطابق أصلًا، ما في شي احتاج تحديث.`;
+    renderProductsAdmin();
+  } catch (err) {
+    statusEl.textContent = '❌ خطأ: ' + err.message;
+  }
 });
 
 function fillProductForm(p) {
