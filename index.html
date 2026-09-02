@@ -339,7 +339,7 @@
         <div class="card">
           <h2>المنتجات</h2>
           <div class="input-with-scan">
-            <input type="text" id="sale-search" placeholder="بحث بالاسم / الباركود / التصنيف...">
+            <input type="text" id="sale-search" placeholder="بحث بالاسم / الرقم المتسلسل / الباركود / التصنيف...">
             <button type="button" class="btn secondary" id="scan-search-btn">📷 مسح</button>
           </div>
           <div id="category-filter-row" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px;"></div>
@@ -373,16 +373,29 @@
       </div>
       <div class="card">
         <h2>قائمة المنتجات (الفرع الحالي)</h2>
-        <input type="text" id="admin-products-search" placeholder="🔍 بحث بالاسم / الباركود / التصنيف...">
+        <input type="text" id="admin-products-search" placeholder="🔍 بحث بالاسم / الرقم المتسلسل / الباركود / التصنيف...">
         <div style="overflow-x:auto;">
           <table>
-            <thead><tr><th>الاسم</th><th>التصنيف</th><th>سعر الشراء</th><th>سعر البيع</th><th>الكمية</th><th></th></tr></thead>
+            <thead><tr><th>الرقم</th><th>الاسم</th><th>التصنيف</th><th>سعر الشراء</th><th>سعر البيع</th><th>الكمية</th><th></th></tr></thead>
             <tbody id="admin-products-list"></tbody>
           </table>
         </div>
         <input type="file" id="product-image-file" accept="image/*" multiple hidden>
         <p id="product-image-status" style="font-size:13px; color:var(--muted); margin-top:8px;"></p>
         <p style="font-size:12px; color:var(--muted); margin-top:4px;">زر "🖼️ صورة للموقع" بيرفع الصورة/الصور مباشرة لموقع TREND ويظهّر المنتج فورًا - لازم تكون عملت "مزامنة" للمنتج مرة قبل هيك (بتبويب الأسفل).</p>
+      </div>
+
+      <div class="card">
+        <h2>📦 رفع صور دفعة وحدة عن طريق الرقم المتسلسل</h2>
+        <p style="font-size:13px; color:var(--muted); margin-top:0;">
+          سمّي كل ملف صورة برقم المنتج بالضبط (مثلاً <code>1023.jpg</code>)، واختار كل الصور دفعة وحدة تحت -
+          النظام بيلاقي المنتج صاحب كل رقم لحاله ويرفعلّه صورته على الموقع تلقائيًا (بدون ما تفتح كل منتج لحاله).
+          إذا في أكتر من صورة لنفس الرقم (مثلاً <code>1023.jpg</code> و <code>1023-2.jpg</code>)، كلهم بينضافوا لنفس المنتج.
+          كل منتج عنده رقمه الثابت من عمود "الرقم" بجدول المنتجات فوق (رقم المنتج نفسه ما بيتغيّر أبدًا، حتى لو تعدّل اسمه أو سعره).
+        </p>
+        <input type="file" id="bulk-image-input" accept="image/*" multiple>
+        <button type="button" class="btn secondary" id="bulk-image-upload-btn" style="margin-top:8px;">🖼️ ابدأ رفع الدفعة</button>
+        <div id="bulk-image-status" style="font-size:13px; margin-top:10px; white-space:pre-line;"></div>
       </div>
 
       <div class="card">
@@ -944,11 +957,12 @@ function renderProductsForSale() {
   const q = $('#sale-search').value.trim().toLowerCase();
   const list = productsCache.filter(p => {
     if (activeSaleCategory && (p.category || '') !== activeSaleCategory) return false;
-    return !q || p.name.toLowerCase().includes(q) || (p.barcode || '').toLowerCase().includes(q) || (p.category || '').toLowerCase().includes(q);
+    return !q || p.name.toLowerCase().includes(q) || (p.barcode || '').toLowerCase().includes(q) ||
+      (p.category || '').toLowerCase().includes(q) || String(p.serial_no || '').includes(q);
   });
   $('#sale-products-list').innerHTML = list.map(p => `
     <div class="product-row">
-      <div class="product-name">${escapeHtml(p.name)}</div>
+      <div class="product-name">${escapeHtml(p.name)}${p.serial_no ? ` <span style="color:var(--muted); font-weight:normal;">#${p.serial_no}</span>` : ''}</div>
       <div class="product-meta">${escapeHtml(p.category || '-')} · متوفر: ${p.quantity}</div>
       <div class="product-price">${Number(p.sell_price).toFixed(0)}</div>
       <button class="btn tiny add-to-cart" data-id="${p.id}">أضف</button>
@@ -1455,12 +1469,14 @@ function renderProductsAdmin() {
   const visibleProducts = !q ? productsCache : productsCache.filter(p =>
     p.name.toLowerCase().includes(q) ||
     (p.barcode || '').toLowerCase().includes(q) ||
-    (p.category || '').toLowerCase().includes(q)
+    (p.category || '').toLowerCase().includes(q) ||
+    String(p.serial_no || '').includes(q)
   );
   $('#admin-products-list').innerHTML = visibleProducts.map(p => {
     const editing = p.id === inlineEditRowId;
     return `
     <tr>
+      <td style="color:var(--muted); font-weight:bold;">${p.serial_no != null ? p.serial_no : '-'}</td>
       <td>${editing
         ? `<input type="text" class="inline-name" value="${escapeAttr(p.name)}" style="width:100%; min-width:100px;">`
         : escapeHtml(p.name)}</td>
@@ -1493,7 +1509,7 @@ function renderProductsAdmin() {
       </td>
     </tr>
   `;
-  }).join('') || `<tr><td colspan="6">${q ? 'لا يوجد منتجات مطابقة للبحث' : 'لا يوجد منتجات'}</td></tr>`;
+  }).join('') || `<tr><td colspan="7">${q ? 'لا يوجد منتجات مطابقة للبحث' : 'لا يوجد منتجات'}</td></tr>`;
 }
 
 $('#admin-products-search').addEventListener('input', renderProductsAdmin);
@@ -1646,6 +1662,79 @@ $('#product-image-file').addEventListener('change', async function () {
     this.value = '';
     pendingImageProduct = null;
   }
+});
+
+// ---------------- رفع صور دفعة وحدة بالرقم المتسلسل (اسم الملف = رقم المنتج) ----------------
+function parseSerialFromFilename(filename) {
+  const base = filename.replace(/\.[^/.]+$/, ''); // شيل امتداد الملف (.jpg/.png/...)
+  const m = base.match(/^\s*0*(\d+)/); // أول رقم بأول اسم الملف (وبتشيل الأصفار الزايدة بالبداية)
+  return m ? parseInt(m[1], 10) : null;
+}
+
+$('#bulk-image-upload-btn').addEventListener('click', async () => {
+  const files = Array.from($('#bulk-image-input').files || []);
+  const statusEl = $('#bulk-image-status');
+  if (!files.length) { statusEl.textContent = '⚠ اختر صور أول'; return; }
+
+  // جمّع الملفات حسب الرقم المستخرج من أول اسمها - عشان لو في أكتر من صورة لنفس المنتج
+  const byNumber = {};
+  const noNumber = [];
+  files.forEach(f => {
+    const n = parseSerialFromFilename(f.name);
+    if (n == null) { noNumber.push(f.name); return; }
+    if (!byNumber[n]) byNumber[n] = [];
+    byNumber[n].push(f);
+  });
+
+  const numbers = Object.keys(byNumber);
+  const results = [];
+  if (!numbers.length) {
+    statusEl.textContent = '❌ ما قدرت ألاقي رقم بأول اسم أي ملف من الصور المختارة.';
+    return;
+  }
+
+  for (const numStr of numbers) {
+    const num = Number(numStr);
+    const product = productsCache.find(p => Number(p.serial_no) === num);
+    if (!product) {
+      results.push(`⚠ رقم ${num}: ما لقيت منتج بهاد الرقم بالفرع الحالي`);
+      statusEl.textContent = results.join('\n');
+      continue;
+    }
+
+    statusEl.textContent = results.concat([`⏳ رقم ${num} (${product.name})...`]).join('\n');
+    const urls = [];
+    for (const file of byNumber[numStr]) {
+      try {
+        const b64 = await shrinkImageFile(file);
+        const url = await uploadToImgbb(b64);
+        urls.push(url);
+      } catch (err) {
+        results.push(`❌ رقم ${num} (${product.name}): فشل رفع "${file.name}" - ${err.message}`);
+      }
+    }
+    if (!urls.length) { statusEl.textContent = results.join('\n'); continue; }
+
+    try {
+      const { data, error } = await supabase.functions.invoke('sync-products', {
+        body: { action: 'setImage', code: product.id, imgs: urls },
+      });
+      if (error || !data || !data.ok) {
+        results.push(`❌ رقم ${num} (${product.name}): انرفعت الصورة بس فشل ربطها بالموقع - ${(data && data.message) || (error && error.message) || ''}`);
+      } else {
+        results.push(`✅ رقم ${num} (${product.name}): تم ربط ${urls.length} صورة وصار ظاهر بالموقع`);
+      }
+    } catch (err) {
+      results.push(`❌ رقم ${num} (${product.name}): خطأ بالربط - ${err.message}`);
+    }
+    statusEl.textContent = results.join('\n');
+  }
+
+  if (noNumber.length) {
+    results.push(`⚠ ${noNumber.length} ملف ما كان بأول اسمه رقم واتجاهل: ${noNumber.join('، ')}`);
+  }
+  statusEl.textContent = results.join('\n');
+  $('#bulk-image-input').value = '';
 });
 
 function fillProductForm(p) {
