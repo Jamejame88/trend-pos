@@ -347,6 +347,16 @@
           <div id="sale-products-list"></div>
         </div>
       </div>
+      <div class="card">
+        <h2>📋 المواد المباعة اليوم (الفرع الحالي)</h2>
+        <p style="font-size:12px; color:var(--muted); margin-top:0;">مجموع كل الأصناف يلي انباعت اليوم بكل فواتير هاد الفرع (بتتحدث تلقائيًا بعد كل عملية بيع).</p>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead><tr><th>المنتج</th><th>الكمية</th><th>الإجمالي</th></tr></thead>
+            <tbody id="today-sold-items-list"></tbody>
+          </table>
+        </div>
+      </div>
     </section>
 
     <!-- ---------- المنتجات (صاحب المحل) ---------- -->
@@ -585,6 +595,11 @@
               <tbody id="daily-by-product"></tbody>
             </table>
           </div>
+        </div>
+        <div class="card">
+          <h2>🧾 تفصيل فواتير اليوم (فاتورة فاتورة)</h2>
+          <p style="font-size:12px; color:var(--muted); margin-top:0;">كل فاتورة بهاد اليوم مع الأصناف يلي انباعت فيها بالضبط.</p>
+          <div id="daily-invoices-detail"></div>
         </div>
         <div class="card">
           <h2>💰 قيمة المخزون والربح المتوقع (الفرع الحالي)</h2>
@@ -910,6 +925,7 @@ $$('.tab-btn').forEach(btn => {
 async function refreshAll() {
   await loadProducts();
   renderPendingSales();
+  await loadTodaySoldItems();
   if (currentProfile.role === 'owner') {
     await loadSalesHistory();
     await loadDebts();
@@ -921,6 +937,29 @@ async function refreshAll() {
     await loadEmployees();
     if (reportUnlocked) { await loadReportData(); await loadDailyReport(); }
   }
+}
+
+// المواد المباعة اليوم (نافذة بشاشة نقطة البيع نفسها - متاحة لكل مستخدم مو بس صاحب المحل)
+async function loadTodaySoldItems() {
+  const { startISO, endISO } = dayBoundsISO(todayLocalDateStr());
+  const { data: itemRows, error } = await supabase
+    .from('sale_items')
+    .select('product_name, quantity, subtotal, sales!inner(branch_id, status, sale_date)')
+    .eq('sales.branch_id', activeBranchId)
+    .eq('sales.status', 'completed')
+    .gte('sales.sale_date', startISO)
+    .lt('sales.sale_date', endISO);
+  if (error) { console.error(error); return; }
+  const byProduct = {};
+  (itemRows || []).forEach((it) => {
+    if (!byProduct[it.product_name]) byProduct[it.product_name] = { qty: 0, total: 0 };
+    byProduct[it.product_name].qty += Number(it.quantity);
+    byProduct[it.product_name].total += Number(it.subtotal);
+  });
+  $('#today-sold-items-list').innerHTML = Object.entries(byProduct)
+    .sort((a, b) => b[1].total - a[1].total)
+    .map(([name, v]) => `<tr><td>${escapeHtml(name)}</td><td>${v.qty}</td><td>${v.total.toFixed(0)}</td></tr>`)
+    .join('') || '<tr><td colspan="3">لسا ما في مبيعات اليوم</td></tr>';
 }
 
 async function loadProducts() {
@@ -1458,6 +1497,7 @@ $('#checkout-btn').addEventListener('click', async () => {
   $('#sale-custom-date-input').value = '';
   renderCart();
   await loadProducts();
+  await loadTodaySoldItems();
   if (currentProfile.role === 'owner') { await loadSalesHistory(); await loadDebts(); }
 });
 
@@ -2248,7 +2288,7 @@ async function loadDailyReport() {
   // فواتير اليوم المكتملة (الفرع الحالي)
   const { data: salesRows, error: salesErr } = await supabase
     .from('sales')
-    .select('id, total, sold_by')
+    .select('id, total, sold_by, sale_date')
     .eq('branch_id', activeBranchId)
     .eq('status', 'completed')
     .gte('sale_date', startISO)
@@ -2285,7 +2325,7 @@ async function loadDailyReport() {
   // تفصيل الأصناف المباعة اليوم + تكلفتها التقديرية (بسعر الشراء الحالي بالنظام)
   const { data: itemRows, error: itemsErr } = await supabase
     .from('sale_items')
-    .select('product_name, quantity, subtotal, products(cost_price), sales!inner(branch_id, status, sale_date)')
+    .select('sale_id, product_name, quantity, subtotal, products(cost_price), sales!inner(branch_id, status, sale_date)')
     .eq('sales.branch_id', activeBranchId)
     .eq('sales.status', 'completed')
     .gte('sales.sale_date', startISO)
@@ -2341,6 +2381,40 @@ async function loadDailyReport() {
     .sort((a, b) => b[1].total - a[1].total)
     .map(([id, v]) => `<tr><td>${escapeHtml(namesMap[id] || 'غير معروف')}</td><td>${v.count}</td><td>${v.total.toFixed(0)}</td></tr>`)
     .join('') || '<tr><td colspan="3">لا يوجد مبيعات بهاد اليوم</td></tr>';
+
+  // تفصيل كل فاتورة مع الأصناف المباعة فيها بالضبط (فاتورة فاتورة)
+  const byInvoice = {};
+  (salesRows || []).forEach((s) => {
+    byInvoice[s.id] = { sale_date: s.sale_date, sold_by: s.sold_by, total: Number(s.total), items: [] };
+  });
+  (itemRows || []).forEach((it) => {
+    if (it.sale_id && byInvoice[it.sale_id]) {
+      byInvoice[it.sale_id].items.push({ name: it.product_name, qty: Number(it.quantity), subtotal: Number(it.subtotal) });
+    }
+  });
+  const invoicesSorted = Object.values(byInvoice).sort((a, b) => new Date(a.sale_date) - new Date(b.sale_date));
+  $('#daily-invoices-detail').innerHTML = invoicesSorted.map((inv, idx) => {
+    const timeStr = new Date(inv.sale_date).toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit' });
+    const cashierName = escapeHtml(namesMap[inv.sold_by] || 'غير معروف');
+    const itemsHtml = inv.items.length
+      ? inv.items.map((it) => `<tr><td>${escapeHtml(it.name)}</td><td>${it.qty}</td><td>${it.subtotal.toFixed(0)}</td></tr>`).join('')
+      : '<tr><td colspan="3">لا يوجد تفاصيل أصناف مسجّلة لهاي الفاتورة</td></tr>';
+    return `
+      <div class="card" style="margin-bottom:10px; padding:10px; background:rgba(255,255,255,.03);">
+        <div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:6px; margin-bottom:6px;">
+          <strong>🧾 فاتورة #${idx + 1} - ${timeStr}</strong>
+          <span>الكاشير: ${cashierName}</span>
+          <span>الإجمالي: <strong>${inv.total.toFixed(0)}</strong></span>
+        </div>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead><tr><th>الصنف</th><th>الكمية</th><th>السعر</th></tr></thead>
+            <tbody>${itemsHtml}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }).join('') || '<p style="color:var(--muted);">لا يوجد فواتير بهاد اليوم</p>';
 }
 
 $('#daily-report-refresh-btn').addEventListener('click', loadDailyReport);
