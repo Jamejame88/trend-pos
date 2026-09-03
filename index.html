@@ -173,6 +173,8 @@
   .totals-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 14px; }
   .totals-row.big { font-size: 18px; font-weight: bold; color: var(--green); }
   .totals-row input { width: 110px; padding: 8px; border-radius: 8px; border: 1px solid var(--border); text-align: center; }
+  /* لما جدول يكون جوا حاوية عندها سكرول عمودي (overflow-y:auto)، خلي رأس الجدول ثابت وهو ينزلق تحته */
+  table thead th { position: sticky; top: 0; background: var(--card); z-index: 1; }
 
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   table th, table td { padding: 8px 6px; border-bottom: 1px solid var(--border); text-align: center; }
@@ -355,13 +357,14 @@
       </div>
       <div class="card">
         <h2>📋 المواد المباعة اليوم (الفرع الحالي)</h2>
-        <p style="font-size:12px; color:var(--muted); margin-top:0;">مجموع كل الأصناف يلي انباعت اليوم بكل فواتير هاد الفرع (بتتحدث تلقائيًا بعد كل عملية بيع).</p>
-        <div style="overflow-x:auto;">
+        <p style="font-size:12px; color:var(--muted); margin-top:0;">كل صنف انباع اليوم بترتيب وقت البيع (من الأقدم للأحدث) - بتتحدث تلقائيًا بعد كل عملية بيع.</p>
+        <div style="max-height:320px; overflow-y:auto; overflow-x:auto;">
           <table>
-            <thead><tr><th>المنتج</th><th>الكمية</th><th>الإجمالي</th></tr></thead>
+            <thead><tr><th>المنتج</th><th>الكمية</th><th>الإجمالي</th><th>الوقت</th></tr></thead>
             <tbody id="today-sold-items-list"></tbody>
           </table>
         </div>
+        <div class="totals-row big"><span>إجمالي مبيعات اليوم</span><span id="today-sold-items-total">0</span></div>
       </div>
     </section>
 
@@ -956,16 +959,16 @@ async function loadTodaySoldItems() {
     .gte('sales.sale_date', startISO)
     .lt('sales.sale_date', endISO);
   if (error) { console.error(error); return; }
-  const byProduct = {};
-  (itemRows || []).forEach((it) => {
-    if (!byProduct[it.product_name]) byProduct[it.product_name] = { qty: 0, total: 0 };
-    byProduct[it.product_name].qty += Number(it.quantity);
-    byProduct[it.product_name].total += Number(it.subtotal);
-  });
-  $('#today-sold-items-list').innerHTML = Object.entries(byProduct)
-    .sort((a, b) => b[1].total - a[1].total)
-    .map(([name, v]) => `<tr><td>${escapeHtml(name)}</td><td>${v.qty}</td><td>${v.total.toFixed(0)}</td></tr>`)
-    .join('') || '<tr><td colspan="3">لسا ما في مبيعات اليوم</td></tr>';
+
+  // ترتيب زمني من الأقدم للأحدث (مش تجميع حسب المنتج) - كل سطر عملية بيع لحالها بوقتها
+  const rows = (itemRows || []).slice().sort((a, b) => new Date(a.sales.sale_date) - new Date(b.sales.sale_date));
+  const grandTotal = rows.reduce((s, it) => s + Number(it.subtotal), 0);
+
+  $('#today-sold-items-list').innerHTML = rows.map((it) => {
+    const timeStr = new Date(it.sales.sale_date).toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit' });
+    return `<tr><td>${escapeHtml(it.product_name)}</td><td>${Number(it.quantity)}</td><td>${Number(it.subtotal).toFixed(0)}</td><td>${timeStr}</td></tr>`;
+  }).join('') || '<tr><td colspan="4">لسا ما في مبيعات اليوم</td></tr>';
+  $('#today-sold-items-total').textContent = grandTotal.toFixed(0);
 }
 
 async function loadProducts() {
