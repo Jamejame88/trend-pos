@@ -128,9 +128,15 @@
   .card h2 { font-size: 15px; margin: 0 0 10px; }
 
   /* نقطة البيع */
-  .pos-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
+  .pos-grid { display: grid; grid-template-columns: 1fr; gap: 14px; align-items: start; }
   @media (min-width: 800px) {
     .pos-grid { grid-template-columns: 1fr 1.3fr; }
+  }
+  /* نافذة "المواد" (تحت شريط البحث) بنفس حجم نافذة "تفاصيل البيع/السلة" وقابلة للسكرول لحالها بدون ما تطوّل الصفحة كلها */
+  #cart-list, #sale-products-list {
+    max-height: 60vh;
+    overflow-y: auto;
+    padding-inline-end: 4px;
   }
   #sale-search, #admin-products-search { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 10px; font-size: 15px; }
   .product-row {
