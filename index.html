@@ -566,8 +566,9 @@
           <button type="button" class="btn secondary tiny" id="daily-report-refresh-btn">🔄 تحديث</button>
           <div class="form-grid" style="margin-top:10px;">
             <div>عدد الفواتير: <strong id="daily-invoice-count">0</strong></div>
-            <div>إجمالي المبيعات: <strong id="daily-total-sales">0</strong></div>
-            <div>إجمالي التكلفة (تقديري): <strong id="daily-total-cost">0</strong></div>
+            <div>إجمالي المبيعات (بعد خصم المرتجعات): <strong id="daily-total-sales">0</strong></div>
+            <div>قيمة مرتجعات الزباين اليوم: <strong id="daily-returns-value">0</strong></div>
+            <div>إجمالي التكلفة (تقديري، بعد خصم المرتجعات): <strong id="daily-total-cost">0</strong></div>
             <div>الربح (هامش البيع): <strong id="daily-gross-profit">0</strong></div>
             <div>مصاريف اليوم: <strong id="daily-expenses">0</strong></div>
             <div>الربح الصافي التقديري لليوم: <strong id="daily-net-profit">0</strong></div>
@@ -2208,9 +2209,31 @@ async function loadDailyReport() {
   if (salesErr) { console.error(salesErr); return; }
 
   const invoiceCount = (salesRows || []).length;
-  const totalSales = (salesRows || []).reduce((s, r) => s + Number(r.total), 0);
+  const rawTotalSales = (salesRows || []).reduce((s, r) => s + Number(r.total), 0);
+
+  // مرتجعات الزباين بهاد اليوم - لازم تتنزل من صافي المبيعات والتكلفة والأرباح
+  const { data: returnRows, error: retErr } = await supabase
+    .from('returns')
+    .select('quantity, unit_price, product_id, products(cost_price)')
+    .eq('branch_id', activeBranchId)
+    .eq('type', 'customer')
+    .gte('return_date', startISO)
+    .lt('return_date', endISO);
+
+  let returnedSales = 0;
+  let returnedCost = 0;
+  if (!retErr) {
+    (returnRows || []).forEach((r) => {
+      returnedSales += Number(r.unit_price) * Number(r.quantity);
+      const cost = (r.products && Number(r.products.cost_price)) || 0;
+      returnedCost += cost * Number(r.quantity);
+    });
+  }
+
+  const totalSales = rawTotalSales - returnedSales;
   $('#daily-invoice-count').textContent = invoiceCount;
   $('#daily-total-sales').textContent = totalSales.toFixed(0);
+  $('#daily-returns-value').textContent = returnedSales.toFixed(0);
 
   // تفصيل الأصناف المباعة اليوم + تكلفتها التقديرية (بسعر الشراء الحالي بالنظام)
   const { data: itemRows, error: itemsErr } = await supabase
@@ -2232,6 +2255,7 @@ async function loadDailyReport() {
       byProduct[it.product_name].total += Number(it.subtotal);
     });
   }
+  totalCost -= returnedCost;
   $('#daily-total-cost').textContent = totalCost.toFixed(0);
   const grossProfit = totalSales - totalCost;
   $('#daily-gross-profit').textContent = grossProfit.toFixed(0);
