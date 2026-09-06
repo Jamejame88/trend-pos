@@ -181,6 +181,10 @@
   table th { color: var(--muted); font-weight: normal; }
   tr.cancelled-row { color: var(--red); }
 
+  /* قائمة اقتراحات الأصناف المشابهة وقت إدخال بضاعة جديدة يدويًا/بالذكاء الاصطناعي */
+  .inv-suggest-item { padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; margin-top: 3px; text-align: right; cursor: pointer; background: var(--card); }
+  .inv-suggest-item:hover { background: var(--orange); color: #fff; border-color: var(--orange); }
+
   .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   @media (max-width: 500px) { .form-grid { grid-template-columns: 1fr; } }
 
@@ -2925,7 +2929,7 @@ $('#invoice-analyze-btn').addEventListener('click', async () => {
         category: existing ? (existing.category || '') : '',
         qty: Math.max(1, parseInt(it.qty) || 1),
         cost,
-        sell: existing ? Number(existing.sell_price) : Math.round(cost * 1.2),
+        sell: existing ? productSell(existing) : Math.round(cost * 1.2),
         existingId: existing ? existing.id : null,
       };
     });
@@ -2957,39 +2961,43 @@ function levenshteinDistance(a, b) {
   }
   return dp[n];
 }
-// بيدور بمنتجات الفرع الحالي عن أقرب اسم شبيه بالاسم المُدخل (بعد التوحيد بـnormalizeProductName)
-// وبيرجع المنتج + درجة التشابه (من 0 لـ1) لو لقى شي فوق حد معقول، وإلا null.
-function findSimilarProduct(name) {
+// بيدور بمنتجات الفرع الحالي عن كل الأسماء الشبيهة بالاسم المُدخل (بعد التوحيد بـnormalizeProductName)
+// وبيرجع قائمة (مرتبة من الأشبه للأقل) بكل منتج نسبة تشابهه فوق حد معقول - مو بس أقرب واحد،
+// عشان يظهروا كلهم بقائمة منسدلة والمستخدم يختار الصح بنفسه.
+const SUGGEST_MATCH_THRESHOLD = 0.4;
+const SUGGEST_MAX_RESULTS = 6;
+function findSimilarProducts(name) {
   const norm = normalizeProductName(name);
-  if (norm.length < 3) return null;
-  let best = null, bestScore = 0;
+  if (norm.length < 2) return [];
+  const scored = [];
   for (const p of productsCache) {
     const pNorm = normalizeProductName(p.name);
-    if (!pNorm || pNorm === norm) continue; // تطابق تام بينلقط أصلًا بمكان تاني (existingId) - ما إلو داعي تنبيه
+    if (!pNorm || pNorm === norm) continue; // تطابق تام - مو "مشابه"، هو نفسه
     const maxLen = Math.max(pNorm.length, norm.length);
     if (!maxLen) continue;
     const dist = levenshteinDistance(norm, pNorm);
     let score = 1 - dist / maxLen;
     if (norm.includes(pNorm) || pNorm.includes(norm)) score = Math.max(score, 0.85); // احتواء اسم بالتاني (زيادة/نقصان كلمة)
-    if (score > bestScore) { bestScore = score; best = p; }
+    if (score >= SUGGEST_MATCH_THRESHOLD) scored.push({ product: p, score });
   }
-  return (best && bestScore >= 0.72) ? { product: best, score: bestScore } : null;
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, SUGGEST_MAX_RESULTS);
 }
-// بيحدّث سطر اقتراح واحد بس (بدون إعادة رسم كل الجدول) عشان ما يفلت التركيز من خانة الاسم وقت الكتابة
+// بيحدّث قائمة اقتراحات الأصناف المشابهة لسطر واحد بس (بدون إعادة رسم كل الجدول)
+// عشان ما يفلت التركيز من خانة الاسم وقت الكتابة.
 function computeAndRenderSuggestion(idx) {
   const el = document.querySelector(`.inv-suggest[data-idx="${idx}"]`);
   if (!el) return;
   const it = invoiceItems[idx];
   if (!it || it.existingId || !(it.name || '').trim()) {
-    el.innerHTML = ''; el.dataset.matchId = ''; return;
+    el.innerHTML = ''; return;
   }
-  const match = findSimilarProduct(it.name);
-  if (match) {
-    el.innerHTML = `⚠ شبيه بمنتج موجود "<b>${escapeHtml(match.product.name)}</b>" - <u>اضغط لاستخدامه بدل ما تنشئ صنف جديد</u>`;
-    el.dataset.matchId = match.product.id;
-  } else {
-    el.innerHTML = ''; el.dataset.matchId = '';
-  }
+  const matches = findSimilarProducts(it.name);
+  if (!matches.length) { el.innerHTML = ''; return; }
+  el.innerHTML = `
+    <div>منتجات مشابهة موجودة - اضغط لاستخدام وحدة منها بدل ما تنشئ صنف جديد:</div>
+    ${matches.map(m => `<div class="inv-suggest-item" data-idx="${idx}" data-match-id="${escapeAttr(m.product.id)}">${escapeHtml(m.product.name)}${m.product.category ? ` <span style="color:var(--muted);">- ${escapeHtml(m.product.category)}</span>` : ''}</div>`).join('')}
+  `;
 }
 
 function renderInvoiceRows() {
@@ -3037,15 +3045,15 @@ $('#invoice-review-list').addEventListener('click', (e) => {
     renderInvoiceRows();
     return;
   }
-  const suggestEl = e.target.closest('.inv-suggest');
-  if (suggestEl && suggestEl.dataset.matchId) {
-    const idx = parseInt(suggestEl.dataset.idx);
-    const match = productsCache.find(p => p.id === suggestEl.dataset.matchId);
+  const suggestItem = e.target.closest('.inv-suggest-item');
+  if (suggestItem) {
+    const idx = parseInt(suggestItem.dataset.idx);
+    const match = productsCache.find(p => p.id === suggestItem.dataset.matchId);
     if (match && invoiceItems[idx]) {
       // دمج السطر مع المنتج الموجود بدل إنشاء صنف جديد مكرر
       invoiceItems[idx].name = match.name;
       invoiceItems[idx].category = match.category || '';
-      invoiceItems[idx].sell = Number(match.sell_price);
+      invoiceItems[idx].sell = productSell(match);
       invoiceItems[idx].existingId = match.id;
       renderInvoiceRows();
     }
