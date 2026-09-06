@@ -465,14 +465,23 @@
           <label style="display:flex; align-items:center; gap:5px;">
             <input type="radio" name="invoice-currency" id="invoice-currency-usd" value="usd"> دولار أمريكي
           </label>
-          <span id="invoice-rate-wrap" style="display:none; align-items:center; gap:6px;">
+        </div>
+        <div id="invoice-usd-mode-wrap" style="display:none; margin-bottom:10px; font-size:13px;">
+          <div style="display:flex; gap:14px; align-items:center; flex-wrap:wrap;">
+            <span>شو بدك تعمل بأسعار الدولار؟</span>
+            <label style="display:flex; align-items:center; gap:5px;">
+              <input type="radio" name="invoice-usd-mode" id="invoice-usd-mode-convert" value="convert" checked> حوّلها لليرة الآن (سعر ثابت لهاي الفاتورة بس)
+            </label>
+            <label style="display:flex; align-items:center; gap:5px;">
+              <input type="radio" name="invoice-usd-mode" id="invoice-usd-mode-tag" value="tag"> خلي المنتج معلّم "دولار" بشكل مستمر (يتحدث تلقائيًا مع سعر الصرف من كرت "💱 سعر صرف الدولار")
+            </label>
+          </div>
+          <span id="invoice-rate-wrap" style="display:none; align-items:center; gap:6px; margin-top:6px;">
             سعر الصرف (ل.س لكل 1$):
             <input type="number" id="invoice-usd-rate" min="0" style="width:100px;" placeholder="مثلاً 15000">
           </span>
         </div>
-        <p id="invoice-currency-hint" style="display:none; font-size:12px; color:var(--muted); margin-top:-4px; margin-bottom:8px;">
-          الأسعار يلي بيقراها الذكاء الاصطناعي من صورة الفاتورة رح تنحوّل تلقائيًا لليرة السورية حسب سعر الصرف يلي حاطّه فوق، قبل ما تظهر بجدول المراجعة تحت.
-        </p>
+        <p id="invoice-currency-hint" style="display:none; font-size:12px; color:var(--muted); margin-top:-4px; margin-bottom:8px;"></p>
         <input type="file" id="invoice-file-input" accept="image/*" capture="environment" style="margin-bottom:10px;">
         <button type="button" class="btn" id="invoice-analyze-btn">🤖 تحليل الفاتورة</button>
         <div id="invoice-status" style="margin-top:8px; font-size:13px;"></div>
@@ -2844,25 +2853,44 @@ const INVOICE_RATE_KEY = 'pos_invoice_usd_rate';
   const rateInput = $('#invoice-usd-rate');
   const rateWrap = $('#invoice-rate-wrap');
   const hintEl = $('#invoice-currency-hint');
+  const modeWrap = $('#invoice-usd-mode-wrap');
   try {
     const savedRate = localStorage.getItem(INVOICE_RATE_KEY);
     if (savedRate) rateInput.value = savedRate;
   } catch (e) { /* تجاهل */ }
   function syncVisibility() {
     const isUsd = $('#invoice-currency-usd').checked;
-    rateWrap.style.display = isUsd ? 'flex' : 'none';
-    hintEl.style.display = isUsd ? 'block' : 'none';
+    const isTag = isUsd && $('#invoice-usd-mode-tag').checked;
+    modeWrap.style.display = isUsd ? 'block' : 'none';
+    rateWrap.style.display = (isUsd && !isTag) ? 'flex' : 'none';
+    if (!isUsd) {
+      hintEl.style.display = 'none';
+    } else if (isTag) {
+      hintEl.style.display = 'block';
+      hintEl.textContent = 'الأرقام يلي بتدخلها/يقراها الذكاء الاصطناعي هون رح تتحفظ متل ما هي بالدولار، والمنتج رح ينعلّم "دولار" تلقائيًا - سعره المعروض بنقطة البيع رح يتحدث حسب سعر الصرف المحفوظ بكرت "💱 سعر صرف الدولار" (مو سعر ثابت).';
+    } else {
+      hintEl.style.display = 'block';
+      hintEl.textContent = 'الأسعار يلي بيقراها الذكاء الاصطناعي من صورة الفاتورة رح تنحوّل تلقائيًا لليرة السورية حسب سعر الصرف يلي حاطّه فوق (سعر ثابت لهاي الفاتورة بس)، قبل ما تظهر بجدول المراجعة تحت.';
+    }
   }
   $('#invoice-currency-syp').addEventListener('change', syncVisibility);
   $('#invoice-currency-usd').addEventListener('change', syncVisibility);
+  $('#invoice-usd-mode-convert').addEventListener('change', syncVisibility);
+  $('#invoice-usd-mode-tag').addEventListener('change', syncVisibility);
   rateInput.addEventListener('input', () => {
     try { localStorage.setItem(INVOICE_RATE_KEY, rateInput.value || ''); } catch (e) { /* تجاهل */ }
   });
   syncVisibility();
 })();
+// 'syp' = الفاتورة بالليرة أصلًا (ما في تحويل)، 'convert' = دولار بس بيتحوّل لليرة فورًا بسعر ثابت،
+// 'tag' = دولار وبيضل معلّم دولار بشكل مستمر على المنتج (يتحدث لحاله مع سعر الصرف المركزي لاحقًا)
+function getInvoiceCurrencyMode() {
+  if (!$('#invoice-currency-usd').checked) return 'syp';
+  return $('#invoice-usd-mode-tag').checked ? 'tag' : 'convert';
+}
 function getInvoiceUsdRateIfSelected() {
-  // بترجع سعر الصرف لو المستخدم اختار "دولار" وحاطط رقم صحيح، وإلا null (يعني ليرة، ما في تحويل)
-  if (!$('#invoice-currency-usd').checked) return null;
+  // بترجع سعر الصرف بس بوضع "تحويل فوري" - وإلا null (يعني ليرة أو وضع "تعليم مستمر"، ما في تحويل فوري)
+  if (getInvoiceCurrencyMode() !== 'convert') return null;
   const rate = parseFloat($('#invoice-usd-rate').value);
   return (rate > 0) ? rate : null;
 }
@@ -2886,8 +2914,8 @@ $('#invoice-analyze-btn').addEventListener('click', async () => {
   const statusEl = $('#invoice-status');
   if (!file) { statusEl.textContent = '⚠ اختر صورة الفاتورة أولًا'; return; }
 
-  // لو اختار "دولار" لازم يحط سعر صرف صحيح قبل ما نكمل - وإلا الأسعار رح تنحفظ غلط
-  if ($('#invoice-currency-usd').checked && !getInvoiceUsdRateIfSelected()) {
+  // لو اختار "دولار" + "حوّلها لليرة الآن" لازم يحط سعر صرف صحيح قبل ما نكمل - وإلا الأسعار رح تنحفظ غلط
+  if (getInvoiceCurrencyMode() === 'convert' && !getInvoiceUsdRateIfSelected()) {
     statusEl.textContent = '⚠ حط سعر الصرف (ل.س مقابل 1$) قبل ما تحلل الفاتورة';
     return;
   }
@@ -2916,20 +2944,29 @@ $('#invoice-analyze-btn').addEventListener('click', async () => {
       statusEl.textContent = `✅ لقى ${items.length} صنف - راجعهم وعدّل إذا لازم قبل التأكيد`;
     }
 
-    // لو اختار "دولار" فوق، منحوّل كل الأسعار المقروءة من صورة الفاتورة لليرة السورية
-    // هلق (بسعر الصرف يلي حاطّه)، عشان جدول المراجعة تحت وقاعدة البيانات دايمًا بالليرة بس.
+    // وضع "تحويل فوري": منحوّل كل الأسعار المقروءة من صورة الفاتورة لليرة السورية هلق (بسعر الصرف
+    // يلي حاطّه)، عشان جدول المراجعة تحت وقاعدة البيانات دايمًا بالليرة بس. وضع "تعليم مستمر":
+    // منسيب الأرقام متل ما هي بالدولار، والتحويل بيصير لاحقًا عند العرض حسب سعر الصرف المركزي.
+    const currencyMode = getInvoiceCurrencyMode();
     const usdRate = getInvoiceUsdRateIfSelected();
+    const isTagUsd = currencyMode === 'tag';
     invoiceItems = items.map((it) => {
       const name = String(it.name || '').trim();
       const existing = productsCache.find(p => normalizeProductName(p.name) === normalizeProductName(name));
       let cost = Number(it.price) || 0;
       if (usdRate) cost = Math.round(cost * usdRate);
+      let sell;
+      if (existing) {
+        sell = isTagUsd ? Number(existing.sell_price) : productSell(existing);
+      } else {
+        sell = isTagUsd ? Math.round(cost * 1.2 * 100) / 100 : Math.round(cost * 1.2);
+      }
       return {
         name,
         category: existing ? (existing.category || '') : '',
         qty: Math.max(1, parseInt(it.qty) || 1),
         cost,
-        sell: existing ? productSell(existing) : Math.round(cost * 1.2),
+        sell,
         existingId: existing ? existing.id : null,
       };
     });
@@ -3073,6 +3110,9 @@ $('#invoice-commit-btn').addEventListener('click', async () => {
 
   const updateCost = $('#invoice-update-cost').checked;
   const updateSell = $('#invoice-update-sell').checked;
+  // وضع "تعليم مستمر" (دولار): الأرقام يلي بجدول المراجعة أصلًا بالدولار - لازم نحط price_currency:'usd'
+  // على المنتج (جديد أو موجود) حتى ينعرض/يتحدث صح حسب سعر الصرف المركزي، مش يتعامل معه كأنه ليرة.
+  const tagAsUsd = getInvoiceCurrencyMode() === 'tag';
   statusEl.textContent = '⏳ عم يحفظ بالمخزون...';
   $('#invoice-commit-btn').disabled = true;
   try {
@@ -3083,6 +3123,7 @@ $('#invoice-commit-btn').addEventListener('click', async () => {
         const updateFields = { quantity: Number(existing.quantity || 0) + Number(it.qty) };
         if (updateCost) updateFields.cost_price = it.cost;
         if (updateSell) updateFields.sell_price = it.sell;
+        if (tagAsUsd && (updateCost || updateSell)) updateFields.price_currency = 'usd';
         const { error } = await supabase.from('products').update(updateFields).eq('id', existing.id);
         if (error) throw error;
       } else {
@@ -3094,6 +3135,7 @@ $('#invoice-commit-btn').addEventListener('click', async () => {
           sell_price: it.sell || Math.round(it.cost * 1.2),
           quantity: it.qty,
           min_quantity: 3,
+          price_currency: tagAsUsd ? 'usd' : 'syp',
         });
         if (error) throw error;
       }
