@@ -2869,10 +2869,67 @@ $('#invoice-analyze-btn').addEventListener('click', async () => {
   }
 });
 
+// ---------------- اقتراح منتج مشابه (تفادي تكرار نفس الصنف باسم مختلف شوي) ----------------
+// Levenshtein بسيط لحساب "قد إيش الاسمين قريبين من بعض" (0 = متطابقين، وكل ما زاد الرقم زاد الاختلاف)
+function levenshteinDistance(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n;
+  if (!n) return m;
+  const dp = new Array(n + 1);
+  for (let j = 0; j <= n; j++) dp[j] = j;
+  for (let i = 1; i <= m; i++) {
+    let prev = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const tmp = dp[j];
+      dp[j] = a[i - 1] === b[j - 1] ? prev : 1 + Math.min(prev, dp[j], dp[j - 1]);
+      prev = tmp;
+    }
+  }
+  return dp[n];
+}
+// بيدور بمنتجات الفرع الحالي عن أقرب اسم شبيه بالاسم المُدخل (بعد التوحيد بـnormalizeProductName)
+// وبيرجع المنتج + درجة التشابه (من 0 لـ1) لو لقى شي فوق حد معقول، وإلا null.
+function findSimilarProduct(name) {
+  const norm = normalizeProductName(name);
+  if (norm.length < 3) return null;
+  let best = null, bestScore = 0;
+  for (const p of productsCache) {
+    const pNorm = normalizeProductName(p.name);
+    if (!pNorm || pNorm === norm) continue; // تطابق تام بينلقط أصلًا بمكان تاني (existingId) - ما إلو داعي تنبيه
+    const maxLen = Math.max(pNorm.length, norm.length);
+    if (!maxLen) continue;
+    const dist = levenshteinDistance(norm, pNorm);
+    let score = 1 - dist / maxLen;
+    if (norm.includes(pNorm) || pNorm.includes(norm)) score = Math.max(score, 0.85); // احتواء اسم بالتاني (زيادة/نقصان كلمة)
+    if (score > bestScore) { bestScore = score; best = p; }
+  }
+  return (best && bestScore >= 0.72) ? { product: best, score: bestScore } : null;
+}
+// بيحدّث سطر اقتراح واحد بس (بدون إعادة رسم كل الجدول) عشان ما يفلت التركيز من خانة الاسم وقت الكتابة
+function computeAndRenderSuggestion(idx) {
+  const el = document.querySelector(`.inv-suggest[data-idx="${idx}"]`);
+  if (!el) return;
+  const it = invoiceItems[idx];
+  if (!it || it.existingId || !(it.name || '').trim()) {
+    el.innerHTML = ''; el.dataset.matchId = ''; return;
+  }
+  const match = findSimilarProduct(it.name);
+  if (match) {
+    el.innerHTML = `⚠ شبيه بمنتج موجود "<b>${escapeHtml(match.product.name)}</b>" - <u>اضغط لاستخدامه بدل ما تنشئ صنف جديد</u>`;
+    el.dataset.matchId = match.product.id;
+  } else {
+    el.innerHTML = ''; el.dataset.matchId = '';
+  }
+}
+
 function renderInvoiceRows() {
   $('#invoice-review-list').innerHTML = invoiceItems.map((it, idx) => `
     <tr>
-      <td><input type="text" class="inv-name" data-idx="${idx}" value="${escapeAttr(it.name)}" style="width:130px;"></td>
+      <td>
+        <input type="text" class="inv-name" data-idx="${idx}" value="${escapeAttr(it.name)}" style="width:130px;">
+        <div class="inv-suggest" data-idx="${idx}" style="font-size:11px; color:var(--orange); margin-top:3px; cursor:pointer;"></div>
+      </td>
       <td><input type="text" class="inv-category" data-idx="${idx}" value="${escapeAttr(it.category)}" style="width:90px;"></td>
       <td><input type="number" class="inv-qty" data-idx="${idx}" value="${it.qty}" min="0" style="width:60px;"></td>
       <td><input type="number" class="inv-cost" data-idx="${idx}" value="${it.cost}" min="0" style="width:80px;"></td>
@@ -2883,6 +2940,8 @@ function renderInvoiceRows() {
       </td>
     </tr>
   `).join('') || '<tr><td colspan="6" class="empty">لا يوجد أسطر - اضغط "+ إضافة سطر" لإضافة صنف يدويًا</td></tr>';
+  // نتأكد فورًا (بدون ما ننتظر المستخدم يكتب) من وجود شبيه لكل سطر - مهم خصوصًا للأسطر يلي عبّاها الذكاء الاصطناعي تلقائيًا
+  invoiceItems.forEach((_, idx) => computeAndRenderSuggestion(idx));
 }
 
 $('#invoice-review-list').addEventListener('input', (e) => {
@@ -2890,7 +2949,11 @@ $('#invoice-review-list').addEventListener('input', (e) => {
   if (idx === undefined) return;
   const i = parseInt(idx);
   if (!invoiceItems[i]) return;
-  if (e.target.classList.contains('inv-name')) invoiceItems[i].name = e.target.value;
+  if (e.target.classList.contains('inv-name')) {
+    invoiceItems[i].name = e.target.value;
+    invoiceItems[i].existingId = null; // غيّر الاسم يدويًا - ما عاد نفترض إنه نفس المنتج المرتبط قبل
+    computeAndRenderSuggestion(i); // بس نحدّث سطر الاقتراح، بدون إعادة رسم الجدول (تفادي فلتان التركيز)
+  }
   else if (e.target.classList.contains('inv-category')) invoiceItems[i].category = e.target.value;
   else if (e.target.classList.contains('inv-qty')) invoiceItems[i].qty = parseInt(e.target.value) || 0;
   else if (e.target.classList.contains('inv-cost')) invoiceItems[i].cost = parseFloat(e.target.value) || 0;
@@ -2898,11 +2961,26 @@ $('#invoice-review-list').addEventListener('input', (e) => {
 });
 
 $('#invoice-review-list').addEventListener('click', (e) => {
-  const btn = e.target.closest('.inv-del');
-  if (!btn) return;
-  const idx = parseInt(btn.dataset.idx);
-  invoiceItems.splice(idx, 1);
-  renderInvoiceRows();
+  const delBtn = e.target.closest('.inv-del');
+  if (delBtn) {
+    const idx = parseInt(delBtn.dataset.idx);
+    invoiceItems.splice(idx, 1);
+    renderInvoiceRows();
+    return;
+  }
+  const suggestEl = e.target.closest('.inv-suggest');
+  if (suggestEl && suggestEl.dataset.matchId) {
+    const idx = parseInt(suggestEl.dataset.idx);
+    const match = productsCache.find(p => p.id === suggestEl.dataset.matchId);
+    if (match && invoiceItems[idx]) {
+      // دمج السطر مع المنتج الموجود بدل إنشاء صنف جديد مكرر
+      invoiceItems[idx].name = match.name;
+      invoiceItems[idx].category = match.category || '';
+      invoiceItems[idx].sell = Number(match.sell_price);
+      invoiceItems[idx].existingId = match.id;
+      renderInvoiceRows();
+    }
+  }
 });
 
 $('#invoice-add-row-btn').addEventListener('click', () => {
