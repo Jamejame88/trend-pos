@@ -435,6 +435,22 @@
       <div class="card">
         <h2>📸 استيراد فاتورة شراء بالذكاء الاصطناعي</h2>
         <p style="font-size:13px; color:var(--muted); margin-top:0;">صوّر فاتورة الشراء من المورد، وبيقرا الأصناف تلقائيًا. راجع الأسعار والكميات قبل ما تأكد الاستيراد.</p>
+        <div style="display:flex; gap:14px; align-items:center; margin-bottom:10px; flex-wrap:wrap; font-size:13px;">
+          <span>عملة الفاتورة:</span>
+          <label style="display:flex; align-items:center; gap:5px;">
+            <input type="radio" name="invoice-currency" id="invoice-currency-syp" value="syp" checked> ليرة سورية
+          </label>
+          <label style="display:flex; align-items:center; gap:5px;">
+            <input type="radio" name="invoice-currency" id="invoice-currency-usd" value="usd"> دولار أمريكي
+          </label>
+          <span id="invoice-rate-wrap" style="display:none; align-items:center; gap:6px;">
+            سعر الصرف (ل.س لكل 1$):
+            <input type="number" id="invoice-usd-rate" min="0" style="width:100px;" placeholder="مثلاً 15000">
+          </span>
+        </div>
+        <p id="invoice-currency-hint" style="display:none; font-size:12px; color:var(--muted); margin-top:-4px; margin-bottom:8px;">
+          الأسعار يلي بيقراها الذكاء الاصطناعي من صورة الفاتورة رح تنحوّل تلقائيًا لليرة السورية حسب سعر الصرف يلي حاطّه فوق، قبل ما تظهر بجدول المراجعة تحت.
+        </p>
         <input type="file" id="invoice-file-input" accept="image/*" capture="environment" style="margin-bottom:10px;">
         <button type="button" class="btn" id="invoice-analyze-btn">🤖 تحليل الفاتورة</button>
         <div id="invoice-status" style="margin-top:8px; font-size:13px;"></div>
@@ -1376,6 +1392,16 @@ $('#pending-sales-retry-btn').addEventListener('click', async () => {
 $('#checkout-btn').addEventListener('click', async () => {
   if (!cart.length) { alert('السلة فاضية'); return; }
 
+  // منع الضغط المزدوج على الزر أثناء معالجة عملية الدفع - بيتفادى تسجيل نفس الفاتورة مرتين
+  // لو الكاشير ضغط الزر أكتر من مرة وهو منتظر رد السيرفر (خصوصًا مع نت بطيء).
+  const checkoutBtn = $('#checkout-btn');
+  if (checkoutBtn.disabled) return;
+  const checkoutBtnOriginalText = checkoutBtn.textContent;
+  checkoutBtn.disabled = true;
+  checkoutBtn.textContent = '⏳ جارٍ إتمام العملية...';
+
+  try {
+
   // فحص أخير للمخزون قبل التأكيد - يمنع بيع كمية أكبر من المتوفر فعليًا
   // (بيقرا الكمية الحالية مباشرة من قاعدة البيانات، مو من الكاش المحلي، تفاديًا لأي فرق).
   // إذا الفحص نفسه فشل بسبب انقطاع النت، منتجاوزه (ما فينا نتأكد) ومنكمل - العملية
@@ -1508,6 +1534,12 @@ $('#checkout-btn').addEventListener('click', async () => {
   await loadProducts();
   await loadTodaySoldItems();
   if (currentProfile.role === 'owner') { await loadSalesHistory(); await loadDebts(); }
+
+  } finally {
+    // بيتنفّذ دايمًا (نجاح، خطأ، أو أي return بنص العملية) - الزر ما بيضل معطّل لو صار خطأ
+    checkoutBtn.disabled = false;
+    checkoutBtn.textContent = checkoutBtnOriginalText;
+  }
 });
 
 // ---------------- إدارة المنتجات (صاحب المحل) ----------------
@@ -2733,6 +2765,35 @@ $('#scanner-close-btn').addEventListener('click', closeScanner);
 // ---------------- استيراد فاتورة بالذكاء الاصطناعي ----------------
 let invoiceItems = [];
 
+// عملة فاتورة الشراء (ليرة/دولار) + سعر الصرف - يتخزنوا محليًا بالجهاز عشان ما تعيد كتابتهم كل مرة
+const INVOICE_RATE_KEY = 'pos_invoice_usd_rate';
+(function initInvoiceCurrency() {
+  const rateInput = $('#invoice-usd-rate');
+  const rateWrap = $('#invoice-rate-wrap');
+  const hintEl = $('#invoice-currency-hint');
+  try {
+    const savedRate = localStorage.getItem(INVOICE_RATE_KEY);
+    if (savedRate) rateInput.value = savedRate;
+  } catch (e) { /* تجاهل */ }
+  function syncVisibility() {
+    const isUsd = $('#invoice-currency-usd').checked;
+    rateWrap.style.display = isUsd ? 'flex' : 'none';
+    hintEl.style.display = isUsd ? 'block' : 'none';
+  }
+  $('#invoice-currency-syp').addEventListener('change', syncVisibility);
+  $('#invoice-currency-usd').addEventListener('change', syncVisibility);
+  rateInput.addEventListener('input', () => {
+    try { localStorage.setItem(INVOICE_RATE_KEY, rateInput.value || ''); } catch (e) { /* تجاهل */ }
+  });
+  syncVisibility();
+})();
+function getInvoiceUsdRateIfSelected() {
+  // بترجع سعر الصرف لو المستخدم اختار "دولار" وحاطط رقم صحيح، وإلا null (يعني ليرة، ما في تحويل)
+  if (!$('#invoice-currency-usd').checked) return null;
+  const rate = parseFloat($('#invoice-usd-rate').value);
+  return (rate > 0) ? rate : null;
+}
+
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -2751,6 +2812,12 @@ $('#invoice-analyze-btn').addEventListener('click', async () => {
   const file = fileInput.files && fileInput.files[0];
   const statusEl = $('#invoice-status');
   if (!file) { statusEl.textContent = '⚠ اختر صورة الفاتورة أولًا'; return; }
+
+  // لو اختار "دولار" لازم يحط سعر صرف صحيح قبل ما نكمل - وإلا الأسعار رح تنحفظ غلط
+  if ($('#invoice-currency-usd').checked && !getInvoiceUsdRateIfSelected()) {
+    statusEl.textContent = '⚠ حط سعر الصرف (ل.س مقابل 1$) قبل ما تحلل الفاتورة';
+    return;
+  }
 
   statusEl.textContent = '⏳ عم يحلل الفاتورة... ممكن ياخد شوي وقت';
   $('#invoice-analyze-btn').disabled = true;
@@ -2776,10 +2843,14 @@ $('#invoice-analyze-btn').addEventListener('click', async () => {
       statusEl.textContent = `✅ لقى ${items.length} صنف - راجعهم وعدّل إذا لازم قبل التأكيد`;
     }
 
+    // لو اختار "دولار" فوق، منحوّل كل الأسعار المقروءة من صورة الفاتورة لليرة السورية
+    // هلق (بسعر الصرف يلي حاطّه)، عشان جدول المراجعة تحت وقاعدة البيانات دايمًا بالليرة بس.
+    const usdRate = getInvoiceUsdRateIfSelected();
     invoiceItems = items.map((it) => {
       const name = String(it.name || '').trim();
       const existing = productsCache.find(p => normalizeProductName(p.name) === normalizeProductName(name));
-      const cost = Number(it.price) || 0;
+      let cost = Number(it.price) || 0;
+      if (usdRate) cost = Math.round(cost * usdRate);
       return {
         name,
         category: existing ? (existing.category || '') : '',
