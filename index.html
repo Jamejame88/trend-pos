@@ -370,6 +370,18 @@
 
     <!-- ---------- المنتجات (صاحب المحل) ---------- -->
     <section id="tab-products" class="tab-panel">
+      <div class="card" id="exchange-rate-card">
+        <h2>💱 سعر صرف الدولار</h2>
+        <p style="font-size:13px; color:var(--muted); margin-top:-6px;">
+          أي منتج عملته "دولار" (تحت) بيظهر سعره بنقطة البيع وبالتقارير محوّل لليرة تلقائيًا حسب هاد السعر. غيّر السعر هون وقت ما يتغير سعر الصرف، وكل أسعار الدولار بتتحدث لحالها بكل مكان بدون ما تدخل على كل منتج.
+        </p>
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+          <label>سعر الصرف الحالي (ل.س لكل 1$):</label>
+          <input type="number" id="usd-rate-input" min="0" step="any" style="width:140px;">
+          <button type="button" class="btn" id="usd-rate-save-btn">💾 حفظ السعر</button>
+          <span id="usd-rate-status" style="font-size:12px; color:var(--muted);"></span>
+        </div>
+      </div>
       <div class="card">
         <h2>➕ إضافة منتج جديد</h2>
         <form id="product-form">
@@ -382,8 +394,14 @@
                 <button type="button" class="btn secondary tiny" id="scan-barcode-btn">📷</button>
               </div>
             </div>
-            <div class="field"><label>سعر الشراء</label><input type="number" id="product-cost" value="0" min="0"></div>
-            <div class="field"><label>سعر البيع *</label><input type="number" id="product-sell" required min="0"></div>
+            <div class="field"><label>عملة الأسعار</label>
+              <select id="product-currency">
+                <option value="syp" selected>ليرة سورية</option>
+                <option value="usd">دولار أمريكي</option>
+              </select>
+            </div>
+            <div class="field"><label>سعر الشراء</label><input type="number" id="product-cost" value="0" min="0" step="any"></div>
+            <div class="field"><label>سعر البيع *</label><input type="number" id="product-sell" required min="0" step="any"></div>
             <div class="field"><label>الكمية</label><input type="number" id="product-qty" value="0" min="0"></div>
             <div class="field"><label>حد التنبيه</label><input type="number" id="product-min" value="3" min="0"></div>
           </div>
@@ -893,7 +911,7 @@ async function runProductSync(dryRun) {
     code: p.id,
     name: p.name,
     category: p.category || '',
-    price: p.sell_price,
+    price: productSell(p),
     quantity: p.quantity,
   }));
 
@@ -987,7 +1005,47 @@ async function loadTodaySoldItems() {
   $('#today-sold-items-total').textContent = grandTotal.toFixed(0);
 }
 
+// ---------------- سعر صرف الدولار (ربط مستمر: أي منتج متسعّر بالدولار بيتحوّل لليرة تلقائيًا حسب هاد السعر) ----------------
+let CURRENT_USD_RATE = 0;
+
+async function loadUsdRate() {
+  const { data, error } = await supabase.from('settings').select('*').eq('branch_id', activeBranchId).eq('key', 'usd_exchange_rate').maybeSingle();
+  CURRENT_USD_RATE = (!error && data && Number(data.value) > 0) ? Number(data.value) : 0;
+  const rateInput = $('#usd-rate-input');
+  if (rateInput && document.activeElement !== rateInput) rateInput.value = CURRENT_USD_RATE || '';
+}
+
+// بيرجع السعر الفعلي بالليرة لأي حقل سعر بالمنتج (cost_price أو sell_price)،
+// محوّل تلقائيًا حسب سعر الصرف الحالي إذا كان المنتج متسعّر بالدولار.
+function effectivePrice(product, field) {
+  const raw = Number(product && product[field]) || 0;
+  if (product && product.price_currency === 'usd' && CURRENT_USD_RATE > 0) return raw * CURRENT_USD_RATE;
+  return raw;
+}
+function productSell(p) { return effectivePrice(p, 'sell_price'); }
+function productCost(p) { return effectivePrice(p, 'cost_price'); }
+
+$('#usd-rate-save-btn').addEventListener('click', async () => {
+  const val = parseFloat($('#usd-rate-input').value);
+  const statusEl = $('#usd-rate-status');
+  if (!(val > 0)) { statusEl.textContent = '⚠ حط رقم سعر صرف صحيح أكبر من صفر'; return; }
+  statusEl.textContent = '⏳ عم يحفظ...';
+  const { data: existing } = await supabase.from('settings').select('*').eq('branch_id', activeBranchId).eq('key', 'usd_exchange_rate').maybeSingle();
+  let error;
+  if (existing) {
+    ({ error } = await supabase.from('settings').update({ value: String(val) }).eq('branch_id', activeBranchId).eq('key', 'usd_exchange_rate'));
+  } else {
+    ({ error } = await supabase.from('settings').insert({ branch_id: activeBranchId, key: 'usd_exchange_rate', value: String(val) }));
+  }
+  if (error) { statusEl.textContent = '❌ خطأ: ' + error.message; return; }
+  CURRENT_USD_RATE = val;
+  statusEl.textContent = '✅ تم الحفظ - كل أسعار الدولار اتحدثت بنقطة البيع وبالتقارير.';
+  renderProductsForSale();
+  renderProductsAdmin();
+});
+
 async function loadProducts() {
+  await loadUsdRate();
   const { data, error } = await supabase.from('products').select('*').eq('branch_id', activeBranchId).order('name');
   if (error) { console.error(error); return; }
   productsCache = data || [];
@@ -1032,7 +1090,7 @@ function renderProductsForSale() {
     <div class="product-row">
       <div class="product-name">${escapeHtml(p.name)}${p.serial_no ? ` <span style="color:var(--muted); font-weight:normal;">#${p.serial_no}</span>` : ''}</div>
       <div class="product-meta">${escapeHtml(p.category || '-')} · متوفر: ${p.quantity}</div>
-      <div class="product-price">${Number(p.sell_price).toFixed(0)}</div>
+      <div class="product-price">${productSell(p).toFixed(0)}</div>
       <button class="btn tiny add-to-cart" data-id="${p.id}">أضف</button>
     </div>
   `).join('') || '<p class="empty">لا يوجد منتجات بهالتصنيف</p>';
@@ -1056,8 +1114,8 @@ function addToCart(productId) {
   } else {
     cart.push({
       product_id: product.id, name: product.name,
-      price: Number(product.sell_price), basePrice: Number(product.sell_price), cost: Number(product.cost_price || 0),
-      qty: 1, subtotal: Number(product.sell_price),
+      price: productSell(product), basePrice: productSell(product), cost: productCost(product),
+      qty: 1, subtotal: productSell(product),
     });
   }
   renderCart();
@@ -1114,7 +1172,7 @@ let saleInvoiceUnmatched = [];
 
 function addInvoiceItemToCart(product, qty, price) {
   qty = Math.max(1, parseInt(qty) || 1);
-  const unitPrice = price > 0 ? Number(price) : Number(product.sell_price);
+  const unitPrice = price > 0 ? Number(price) : productSell(product);
   const existing = cart.find(i => i.product_id === product.id);
   if (existing) {
     existing.qty += qty;
@@ -1122,7 +1180,7 @@ function addInvoiceItemToCart(product, qty, price) {
   } else {
     cart.push({
       product_id: product.id, name: product.name,
-      price: unitPrice, basePrice: Number(product.sell_price), cost: Number(product.cost_price || 0),
+      price: unitPrice, basePrice: productSell(product), cost: productCost(product),
       qty, subtotal: unitPrice * qty,
     });
   }
@@ -1573,11 +1631,17 @@ function renderProductsAdmin() {
         </select>
       </td>
       <td>${editing
-        ? `<input type="number" class="inline-cost" value="${Number(p.cost_price)}" min="0" style="width:100%; min-width:75px;">`
-        : Number(p.cost_price).toFixed(0)}</td>
+        ? `<input type="number" class="inline-cost" value="${Number(p.cost_price)}" min="0" step="any" style="width:100%; min-width:75px;">`
+        : `${productCost(p).toFixed(0)}${p.price_currency === 'usd' ? ` <small style="color:var(--muted);">($${Number(p.cost_price).toFixed(2)})</small>` : ''}`}</td>
       <td>${editing
-        ? `<input type="number" class="inline-sell" value="${Number(p.sell_price)}" min="0" style="width:100%; min-width:75px;">`
-        : Number(p.sell_price).toFixed(0)}</td>
+        ? `<div style="display:flex; flex-direction:column; gap:4px; min-width:80px;">
+             <input type="number" class="inline-sell" value="${Number(p.sell_price)}" min="0" step="any" style="width:100%;">
+             <select class="inline-currency" style="width:100%; font-size:11px;">
+               <option value="syp" ${p.price_currency !== 'usd' ? 'selected' : ''}>ل.س</option>
+               <option value="usd" ${p.price_currency === 'usd' ? 'selected' : ''}>دولار $</option>
+             </select>
+           </div>`
+        : `${productSell(p).toFixed(0)}${p.price_currency === 'usd' ? ` <small style="color:var(--muted);">($${Number(p.sell_price).toFixed(2)})</small>` : ''}`}</td>
       <td>${editing
         ? `<input type="number" class="inline-qty" value="${Number(p.quantity)}" min="0" style="width:100%; min-width:65px;">`
         : p.quantity}</td>
@@ -1643,10 +1707,11 @@ $('#admin-products-list').addEventListener('click', async (e) => {
     const cost = parseFloat(tr.querySelector('.inline-cost').value || 0);
     const sell = parseFloat(tr.querySelector('.inline-sell').value || 0);
     const qty  = parseInt(tr.querySelector('.inline-qty').value || 0, 10);
+    const currency = tr.querySelector('.inline-currency').value;
     if (!name) { alert('اسم المنتج ما فيه يضل فاضي'); return; }
     if (!sell) { alert('سعر البيع لازم يكون أكبر من صفر'); return; }
     const { error } = await supabase.from('products').update({
-      name, cost_price: cost, sell_price: sell, quantity: qty,
+      name, cost_price: cost, sell_price: sell, quantity: qty, price_currency: currency,
     }).eq('id', id);
     if (error) { alert('خطأ بالحفظ: ' + error.message); return; }
     inlineEditRowId = null;
@@ -1875,6 +1940,7 @@ function fillProductForm(p) {
   $('#product-name').value = p ? p.name : '';
   $('#product-category').value = p ? (p.category || '') : '';
   $('#product-barcode').value = p ? (p.barcode || '') : '';
+  $('#product-currency').value = p ? (p.price_currency || 'syp') : 'syp';
   $('#product-cost').value = p ? p.cost_price : 0;
   $('#product-sell').value = p ? p.sell_price : '';
   $('#product-qty').value = p ? p.quantity : 0;
@@ -1890,6 +1956,7 @@ $('#product-form').addEventListener('submit', async (e) => {
     name: $('#product-name').value.trim(),
     category: $('#product-category').value.trim() || null,
     barcode: $('#product-barcode').value.trim() || null,
+    price_currency: $('#product-currency').value || 'syp',
     cost_price: parseFloat($('#product-cost').value || 0),
     sell_price: parseFloat($('#product-sell').value || 0),
     quantity: parseInt($('#product-qty').value || 0, 10),
@@ -2185,14 +2252,14 @@ $('#supplier-return-btn').addEventListener('click', async () => {
 
   const { error: retErr } = await supabase.from('returns').insert({
     branch_id: activeBranchId, sale_id: null, product_id: productId, product_name: product.name,
-    quantity: qty, unit_price: product.cost_price, type: 'supplier', note,
+    quantity: qty, unit_price: productCost(product), type: 'supplier', note,
   });
   if (retErr) alert('تم خصم الكمية، لكن صار خطأ بتسجيل المرتجع بالسجل: ' + retErr.message);
 
   await supabase.from('activity_log').insert({
     branch_id: activeBranchId, action_type: 'supplier_return',
     description: `مرتجع للمورد: ${product.name} (${qty})` + (note ? ' - ' + note : ''),
-    amount: qty * Number(product.cost_price), performed_by: currentProfile.id,
+    amount: qty * productCost(product), performed_by: currentProfile.id,
   });
 
   $('#supplier-return-qty').value = 1;
@@ -2342,7 +2409,7 @@ async function loadDailyReport() {
   // مرتجعات الزباين بهاد اليوم - لازم تتنزل من صافي المبيعات والتكلفة والأرباح
   const { data: returnRows, error: retErr } = await supabase
     .from('returns')
-    .select('quantity, unit_price, product_id, products(cost_price)')
+    .select('quantity, unit_price, product_id, products(cost_price, price_currency)')
     .eq('branch_id', activeBranchId)
     .eq('type', 'customer')
     .gte('return_date', startISO)
@@ -2353,7 +2420,8 @@ async function loadDailyReport() {
   if (!retErr) {
     (returnRows || []).forEach((r) => {
       returnedSales += Number(r.unit_price) * Number(r.quantity);
-      const cost = (r.products && Number(r.products.cost_price)) || 0;
+      let cost = (r.products && Number(r.products.cost_price)) || 0;
+      if (r.products && r.products.price_currency === 'usd' && CURRENT_USD_RATE > 0) cost *= CURRENT_USD_RATE;
       returnedCost += cost * Number(r.quantity);
     });
   }
@@ -2366,7 +2434,7 @@ async function loadDailyReport() {
   // تفصيل الأصناف المباعة اليوم + تكلفتها التقديرية (بسعر الشراء الحالي بالنظام)
   const { data: itemRows, error: itemsErr } = await supabase
     .from('sale_items')
-    .select('sale_id, product_name, quantity, subtotal, products(cost_price), sales!inner(branch_id, status, sale_date)')
+    .select('sale_id, product_name, quantity, subtotal, products(cost_price, price_currency), sales!inner(branch_id, status, sale_date)')
     .eq('sales.branch_id', activeBranchId)
     .eq('sales.status', 'completed')
     .gte('sales.sale_date', startISO)
@@ -2376,7 +2444,8 @@ async function loadDailyReport() {
   const byProduct = {};
   if (!itemsErr) {
     (itemRows || []).forEach((it) => {
-      const cost = (it.products && Number(it.products.cost_price)) || 0;
+      let cost = (it.products && Number(it.products.cost_price)) || 0;
+      if (it.products && it.products.price_currency === 'usd' && CURRENT_USD_RATE > 0) cost *= CURRENT_USD_RATE;
       totalCost += cost * Number(it.quantity);
       if (!byProduct[it.product_name]) byProduct[it.product_name] = { qty: 0, total: 0 };
       byProduct[it.product_name].qty += Number(it.quantity);
@@ -2462,8 +2531,8 @@ $('#daily-report-refresh-btn').addEventListener('click', loadDailyReport);
 $('#daily-report-date').addEventListener('change', loadDailyReport);
 
 async function loadReportData() {
-  const cost_value = productsCache.reduce((s, p) => s + Number(p.cost_price) * p.quantity, 0);
-  const sell_value = productsCache.reduce((s, p) => s + Number(p.sell_price) * p.quantity, 0);
+  const cost_value = productsCache.reduce((s, p) => s + productCost(p) * p.quantity, 0);
+  const sell_value = productsCache.reduce((s, p) => s + productSell(p) * p.quantity, 0);
   const total_qty = productsCache.reduce((s, p) => s + p.quantity, 0);
   $('#report-product-count').textContent = productsCache.length;
   $('#report-total-qty').textContent = total_qty;
