@@ -300,6 +300,7 @@
     <button class="tab-btn owner-only" data-tab="debts">الديون</button>
     <button class="tab-btn owner-only" data-tab="expenses">المصاريف</button>
     <button class="tab-btn owner-only" data-tab="returns">المرتجعات</button>
+    <button class="tab-btn owner-only" data-tab="purchases">فواتير التوريد</button>
     <button class="tab-btn owner-only" data-tab="report">التقرير 🔒</button>
     <button class="tab-btn owner-only" data-tab="log">سجل العمليات</button>
     <button class="tab-btn owner-only" data-tab="employees">الموظفين</button>
@@ -416,9 +417,10 @@
       <div class="card">
         <h2>قائمة المنتجات (الفرع الحالي)</h2>
         <input type="text" id="admin-products-search" placeholder="🔍 بحث بالاسم / الرقم المتسلسل / الباركود / التصنيف...">
+        <div id="admin-category-filter-row" style="display:flex; flex-wrap:wrap; gap:6px; margin:10px 0;"></div>
         <div style="max-height:60vh; overflow-y:auto; overflow-x:auto;">
           <table>
-            <thead><tr><th>الرقم</th><th>الاسم</th><th>التصنيف</th><th>سعر الشراء</th><th>سعر البيع</th><th>الكمية</th><th></th></tr></thead>
+            <thead><tr><th>الرقم</th><th>الاسم</th><th>التصنيف</th><th>سعر الشراء</th><th>آخر سعر شراء</th><th>سعر البيع</th><th>الكمية</th><th></th></tr></thead>
             <tbody id="admin-products-list"></tbody>
           </table>
         </div>
@@ -608,6 +610,20 @@
           <table>
             <thead><tr><th>التاريخ</th><th>النوع</th><th>المنتج</th><th>الكمية</th><th>السعر</th><th>ملاحظة</th><th></th></tr></thead>
             <tbody id="returns-list"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- فواتير التوريد (صاحب المحل) ---------- -->
+    <section id="tab-purchases" class="tab-panel">
+      <div class="card">
+        <h2>📦 سجل فواتير التوريد</h2>
+        <p style="font-size:13px; color:var(--muted); margin-top:0;">كل فاتورة توريد (يدوية أو مستوردة بالذكاء الاصطناعي من تبويب "المنتجات") بتنسجل هون تلقائيًا. فيك تعدّل أي فاتورة (الكمية / سعر الشراء / سعر البيع / العملة لكل صنف) أو تحذفها بالكامل، والمخزون بيتحدث تلقائيًا حسب التعديل.</p>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead><tr><th>التاريخ</th><th>عدد الأصناف</th><th>إجمالي التكلفة</th><th></th></tr></thead>
+            <tbody id="purchase-invoices-list"></tbody>
           </table>
         </div>
       </div>
@@ -989,6 +1005,7 @@ async function refreshAll() {
     await loadReturnSalePicker();
     await loadSupplierReturnProductPicker();
     await loadReturns();
+    await loadPurchaseInvoices();
     await loadActivityLog();
     await loadEmployees();
     if (reportUnlocked) { await loadReportData(); await loadDailyReport(); }
@@ -1037,6 +1054,18 @@ function effectivePrice(product, field) {
 }
 function productSell(p) { return effectivePrice(p, 'sell_price'); }
 function productCost(p) { return effectivePrice(p, 'cost_price'); }
+
+// آخر سعر شراء لكل منتج - مبني من سجل فواتير التوريد (purchaseInvoicesCache)، راجع loadPurchaseInvoices()
+let lastPurchasePriceMap = {};
+function lastPurchaseDisplay(p) {
+  const rec = lastPurchasePriceMap[p.id];
+  if (!rec) return '<span style="color:var(--muted);">-</span>';
+  if (rec.currency === 'usd') {
+    const converted = CURRENT_USD_RATE > 0 ? Math.round(rec.cost * CURRENT_USD_RATE) : rec.cost;
+    return `${converted} <small style="color:var(--muted);">($${Number(rec.cost).toFixed(2)})</small>`;
+  }
+  return `${Number(rec.cost).toFixed(0)}`;
+}
 
 $('#usd-rate-save-btn').addEventListener('click', async () => {
   const val = parseFloat($('#usd-rate-input').value);
@@ -1617,17 +1646,42 @@ $('#checkout-btn').addEventListener('click', async () => {
 let editingProductId = null;
 let inlineEditRowId = null; // id المنتج يلي عم يتعدّل حاليًا مباشرة بنفس سطر الجدول
 
+// فلترة قائمة "المنتجات" (تبويب المنتجات) حسب القسم - نفس مبدأ فلترة شاشة البيع تمامًا
+let activeAdminCategory = null; // null = كل الأقسام
+
+function renderAdminCategoryFilters(allCategories) {
+  const rowEl = $('#admin-category-filter-row');
+  if (!rowEl) return;
+  // إذا القسم المختار حاليًا صار غير موجود (انحذف/تغيّر اسمه)، نرجع لـ"كل الأقسام"
+  if (activeAdminCategory && !allCategories.includes(activeAdminCategory)) activeAdminCategory = null;
+  const chips = [
+    `<button type="button" class="btn chip admin-category-chip ${!activeAdminCategory ? 'active' : ''}" data-cat="">كل الأقسام</button>`,
+    ...allCategories.map(c => `<button type="button" class="btn chip admin-category-chip ${activeAdminCategory === c ? 'active' : ''}" data-cat="${escapeAttr(c)}">${escapeHtml(c)}</button>`),
+  ];
+  rowEl.innerHTML = chips.join('');
+}
+
+$('#admin-category-filter-row').addEventListener('click', (e) => {
+  const chip = e.target.closest('.admin-category-chip');
+  if (!chip) return;
+  activeAdminCategory = chip.dataset.cat || null;
+  renderProductsAdmin();
+});
+
 function renderProductsAdmin() {
   if (currentProfile.role !== 'owner') return;
   const allCategories = [...new Set(productsCache.map(p => (p.category || '').trim()).filter(Boolean))]
     .sort((a, b) => a.localeCompare('ar'));
+  renderAdminCategoryFilters(allCategories);
   const q = ($('#admin-products-search')?.value || '').trim().toLowerCase();
-  const visibleProducts = !q ? productsCache : productsCache.filter(p =>
-    p.name.toLowerCase().includes(q) ||
-    (p.barcode || '').toLowerCase().includes(q) ||
-    (p.category || '').toLowerCase().includes(q) ||
-    String(p.serial_no || '').includes(q)
-  );
+  const visibleProducts = productsCache.filter(p => {
+    if (activeAdminCategory && (p.category || '') !== activeAdminCategory) return false;
+    if (!q) return true;
+    return p.name.toLowerCase().includes(q) ||
+      (p.barcode || '').toLowerCase().includes(q) ||
+      (p.category || '').toLowerCase().includes(q) ||
+      String(p.serial_no || '').includes(q);
+  });
   $('#admin-products-list').innerHTML = visibleProducts.map(p => {
     const editing = p.id === inlineEditRowId;
     return `
@@ -1646,6 +1700,7 @@ function renderProductsAdmin() {
       <td>${editing
         ? `<input type="number" class="inline-cost" value="${Number(p.cost_price)}" min="0" step="any" style="width:100%; min-width:75px;">`
         : `${productCost(p).toFixed(0)}${p.price_currency === 'usd' ? ` <small style="color:var(--muted);">($${Number(p.cost_price).toFixed(2)})</small>` : ''}`}</td>
+      <td>${lastPurchaseDisplay(p)}</td>
       <td>${editing
         ? `<div style="display:flex; flex-direction:column; gap:4px; min-width:80px;">
              <input type="number" class="inline-sell" value="${Number(p.sell_price)}" min="0" step="any" style="width:100%;">
@@ -1671,7 +1726,7 @@ function renderProductsAdmin() {
       </td>
     </tr>
   `;
-  }).join('') || `<tr><td colspan="7">${q ? 'لا يوجد منتجات مطابقة للبحث' : 'لا يوجد منتجات'}</td></tr>`;
+  }).join('') || `<tr><td colspan="8">${q ? 'لا يوجد منتجات مطابقة للبحث' : (activeAdminCategory ? 'لا يوجد منتجات بهالقسم' : 'لا يوجد منتجات')}</td></tr>`;
 }
 
 $('#admin-products-search').addEventListener('input', renderProductsAdmin);
@@ -3116,10 +3171,22 @@ $('#invoice-commit-btn').addEventListener('click', async () => {
   statusEl.textContent = '⏳ عم يحفظ بالمخزون...';
   $('#invoice-commit-btn').disabled = true;
   try {
+    // رأس فاتورة التوريد - بينحفظ أولًا حتى نقدر نربط كل صنف فيها (سجل فواتير التوريد الجديد)
+    const { data: invoiceRow, error: invoiceErr } = await supabase.from('purchase_invoices').insert({
+      branch_id: activeBranchId,
+      total_cost: validItems.reduce((sum, it) => sum + (Number(it.cost) || 0) * (Number(it.qty) || 0), 0),
+      created_by: currentProfile ? currentProfile.id : null,
+    }).select().single();
+    if (invoiceErr) throw invoiceErr;
+
+    const invoiceItemRows = [];
+
     for (const it of validItems) {
       const name = it.name.trim();
       const existing = productsCache.find(p => normalizeProductName(p.name) === normalizeProductName(name));
+      let productId = null;
       if (existing) {
+        productId = existing.id;
         const updateFields = { quantity: Number(existing.quantity || 0) + Number(it.qty) };
         if (updateCost) updateFields.cost_price = it.cost;
         if (updateSell) updateFields.sell_price = it.sell;
@@ -3127,7 +3194,7 @@ $('#invoice-commit-btn').addEventListener('click', async () => {
         const { error } = await supabase.from('products').update(updateFields).eq('id', existing.id);
         if (error) throw error;
       } else {
-        const { error } = await supabase.from('products').insert({
+        const { data: newProd, error } = await supabase.from('products').insert({
           branch_id: activeBranchId,
           name,
           category: it.category ? it.category.trim() : null,
@@ -3136,9 +3203,25 @@ $('#invoice-commit-btn').addEventListener('click', async () => {
           quantity: it.qty,
           min_quantity: 3,
           price_currency: tagAsUsd ? 'usd' : 'syp',
-        });
+        }).select().single();
         if (error) throw error;
+        productId = newProd ? newProd.id : null;
       }
+      invoiceItemRows.push({
+        invoice_id: invoiceRow.id,
+        product_id: productId,
+        product_name: name,
+        category: it.category ? it.category.trim() : null,
+        quantity: it.qty,
+        cost_price: it.cost,
+        sell_price: it.sell,
+        price_currency: tagAsUsd ? 'usd' : 'syp',
+      });
+    }
+
+    if (invoiceItemRows.length) {
+      const { error: itemsErr } = await supabase.from('purchase_invoice_items').insert(invoiceItemRows);
+      if (itemsErr) throw itemsErr;
     }
 
     await supabase.from('activity_log').insert({
@@ -3155,12 +3238,223 @@ $('#invoice-commit-btn').addEventListener('click', async () => {
     $('#invoice-review-wrap').style.display = 'none';
     $('#invoice-file-input').value = '';
     await loadProducts();
+    await loadPurchaseInvoices();
   } catch (err) {
     statusEl.textContent = '❌ خطأ بالحفظ: ' + err.message;
   } finally {
     $('#invoice-commit-btn').disabled = false;
   }
 });
+
+// ---------------- سجل فواتير التوريد (صاحب المحل) - تعديل/حذف كل فاتورة لحالها ----------------
+let purchaseInvoicesCache = [];
+let expandedInvoiceId = null;
+let removedInvoiceItemIds = new Set();
+
+async function loadPurchaseInvoices() {
+  if (!currentProfile || currentProfile.role !== 'owner') return;
+  const { data, error } = await supabase
+    .from('purchase_invoices')
+    .select('*, purchase_invoice_items(*)')
+    .eq('branch_id', activeBranchId)
+    .order('invoice_date', { ascending: false })
+    .limit(200);
+  if (error) { console.error(error); return; }
+  purchaseInvoicesCache = data || [];
+  buildLastPurchasePriceMap();
+  renderPurchaseInvoices();
+  renderProductsAdmin();
+}
+
+// بيبني خريطة (product_id -> آخر سعر شراء) من سجل فواتير التوريد المحمّل (مرتب أصلًا تنازليًا حسب التاريخ)
+function buildLastPurchasePriceMap() {
+  lastPurchasePriceMap = {};
+  for (const inv of purchaseInvoicesCache) {
+    for (const it of (inv.purchase_invoice_items || [])) {
+      if (!it.product_id || lastPurchasePriceMap[it.product_id]) continue;
+      lastPurchasePriceMap[it.product_id] = { cost: Number(it.cost_price) || 0, currency: it.price_currency || 'syp', date: inv.invoice_date };
+    }
+  }
+}
+
+function renderPurchaseInvoices() {
+  const listEl = $('#purchase-invoices-list');
+  if (!listEl) return;
+  if (!purchaseInvoicesCache.length) { listEl.innerHTML = '<tr><td colspan="4">لا يوجد فواتير توريد مسجّلة</td></tr>'; return; }
+  listEl.innerHTML = purchaseInvoicesCache.map(inv => {
+    const items = inv.purchase_invoice_items || [];
+    const isOpen = inv.id === expandedInvoiceId;
+    return `
+      <tr>
+        <td>${new Date(inv.invoice_date).toLocaleString('ar')}</td>
+        <td>${items.length}</td>
+        <td>${Number(inv.total_cost).toFixed(0)}</td>
+        <td>
+          <button class="btn tiny secondary toggle-invoice" data-id="${inv.id}">${isOpen ? 'إخفاء' : 'تعديل'}</button>
+          <button class="btn tiny danger delete-invoice" data-id="${inv.id}">حذف</button>
+        </td>
+      </tr>
+      ${isOpen ? `
+      <tr>
+        <td colspan="4">
+          <div style="overflow-x:auto;">
+            <table class="edit-invoice-table" data-invoice-id="${inv.id}">
+              <thead><tr><th>الصنف</th><th>الكمية</th><th>سعر الشراء</th><th>سعر البيع</th><th>العملة</th><th></th></tr></thead>
+              <tbody>
+                ${items.map(it => `
+                  <tr data-item-id="${it.id}">
+                    <td>${escapeHtml(it.product_name)}${!it.product_id ? ' <br><small style="color:var(--muted);">(الصنف محذوف من المخزون)</small>' : ''}</td>
+                    <td><input type="number" class="pi-item-qty" value="${Number(it.quantity)}" min="0" style="width:70px;"></td>
+                    <td><input type="number" class="pi-item-cost" value="${Number(it.cost_price)}" min="0" step="any" style="width:85px;"></td>
+                    <td><input type="number" class="pi-item-sell" value="${Number(it.sell_price)}" min="0" step="any" style="width:85px;"></td>
+                    <td>
+                      <select class="pi-item-currency">
+                        <option value="syp" ${it.price_currency !== 'usd' ? 'selected' : ''}>ل.س</option>
+                        <option value="usd" ${it.price_currency === 'usd' ? 'selected' : ''}>دولار $</option>
+                      </select>
+                    </td>
+                    <td><button class="btn tiny danger delete-invoice-item" data-item-id="${it.id}">حذف السطر</button></td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+          <p style="font-size:12px; color:var(--muted);">تعديل الكمية/السعر هون بيصحح كمية المخزون تلقائيًا (فرق الكمية القديمة عن الجديدة). لو هاي أحدث فاتورة توريد لهاد الصنف، السعر/العملة الجديدة بتنعكس مباشرة على سعر المنتج الحالي بالمخزون.</p>
+          <button class="btn tiny save-invoice-edit" data-id="${inv.id}">💾 حفظ تعديلات الفاتورة</button>
+          <span class="pi-edit-status" data-id="${inv.id}" style="font-size:12px; margin-right:8px;"></span>
+        </td>
+      </tr>
+      ` : ''}
+    `;
+  }).join('');
+}
+
+$('#purchase-invoices-list').addEventListener('click', async (e) => {
+  const toggleBtn = e.target.closest('.toggle-invoice');
+  if (toggleBtn) {
+    expandedInvoiceId = expandedInvoiceId === toggleBtn.dataset.id ? null : toggleBtn.dataset.id;
+    removedInvoiceItemIds = new Set();
+    renderPurchaseInvoices();
+    return;
+  }
+  const delItemBtn = e.target.closest('.delete-invoice-item');
+  if (delItemBtn) {
+    removedInvoiceItemIds.add(delItemBtn.dataset.itemId);
+    const row = delItemBtn.closest('tr');
+    if (row) row.remove();
+    return;
+  }
+  const saveBtn = e.target.closest('.save-invoice-edit');
+  if (saveBtn) { await saveInvoiceEdit(saveBtn.dataset.id); return; }
+  const delInvBtn = e.target.closest('.delete-invoice');
+  if (delInvBtn) { await deletePurchaseInvoice(delInvBtn.dataset.id); return; }
+});
+
+async function saveInvoiceEdit(invoiceId) {
+  const table = document.querySelector(`.edit-invoice-table[data-invoice-id="${invoiceId}"]`);
+  const statusEl = document.querySelector(`.pi-edit-status[data-id="${invoiceId}"]`);
+  const invoice = purchaseInvoicesCache.find(i => i.id === invoiceId);
+  if (!table || !invoice) return;
+  if (statusEl) statusEl.textContent = '⏳ عم يحفظ...';
+
+  try {
+    // 1) أي سطر انحذف من الفاتورة بالكامل - نرجّع كميته من المخزون ثم نحذفه من الجدول
+    for (const itemId of removedInvoiceItemIds) {
+      const original = (invoice.purchase_invoice_items || []).find(it => it.id === itemId);
+      if (!original) continue;
+      if (original.product_id) {
+        const prod = productsCache.find(p => p.id === original.product_id);
+        if (prod) {
+          const newQty = Math.max(0, Number(prod.quantity || 0) - Number(original.quantity || 0));
+          const { error: pErr } = await supabase.from('products').update({ quantity: newQty }).eq('id', original.product_id);
+          if (pErr) throw pErr;
+        }
+      }
+      const { error: delErr } = await supabase.from('purchase_invoice_items').delete().eq('id', itemId);
+      if (delErr) throw delErr;
+    }
+
+    // 2) لكل منتج، شو هي أحدث فاتورة توريد (بين الفواتير المحمّلة) - عشان نعرف نعكس سعر التعديل على المنتج الحالي وإلا لأ
+    const latestInvoiceDateForProduct = {};
+    for (const inv of purchaseInvoicesCache) {
+      for (const it of (inv.purchase_invoice_items || [])) {
+        if (!it.product_id) continue;
+        if (!latestInvoiceDateForProduct[it.product_id] || new Date(inv.invoice_date) > new Date(latestInvoiceDateForProduct[it.product_id])) {
+          latestInvoiceDateForProduct[it.product_id] = inv.invoice_date;
+        }
+      }
+    }
+
+    // 3) الأسطر الباقية بالجدول - نحدّث قيمها ونصحح كمية المخزون بالفرق
+    const rows = table.querySelectorAll('tbody tr[data-item-id]');
+    let newTotalCost = 0;
+    for (const row of rows) {
+      const itemId = row.dataset.itemId;
+      const original = (invoice.purchase_invoice_items || []).find(it => it.id === itemId);
+      if (!original) continue;
+      const newQty = Math.max(0, Number(row.querySelector('.pi-item-qty').value) || 0);
+      const newCost = Math.max(0, Number(row.querySelector('.pi-item-cost').value) || 0);
+      const newSell = Math.max(0, Number(row.querySelector('.pi-item-sell').value) || 0);
+      const newCurrency = row.querySelector('.pi-item-currency').value;
+      newTotalCost += newCost * newQty;
+
+      const { error: updItemErr } = await supabase.from('purchase_invoice_items').update({
+        quantity: newQty, cost_price: newCost, sell_price: newSell, price_currency: newCurrency,
+      }).eq('id', itemId);
+      if (updItemErr) throw updItemErr;
+
+      if (original.product_id) {
+        const prod = productsCache.find(p => p.id === original.product_id);
+        if (prod) {
+          const qtyDelta = newQty - Number(original.quantity || 0);
+          const updateFields = { quantity: Math.max(0, Number(prod.quantity || 0) + qtyDelta) };
+          const isLatestForProduct = latestInvoiceDateForProduct[original.product_id] === invoice.invoice_date;
+          if (isLatestForProduct) {
+            updateFields.cost_price = newCost;
+            updateFields.sell_price = newSell;
+            updateFields.price_currency = newCurrency;
+          }
+          const { error: updProdErr } = await supabase.from('products').update(updateFields).eq('id', original.product_id);
+          if (updProdErr) throw updProdErr;
+        }
+      }
+    }
+
+    const { error: updInvErr } = await supabase.from('purchase_invoices').update({ total_cost: newTotalCost }).eq('id', invoiceId);
+    if (updInvErr) throw updInvErr;
+
+    removedInvoiceItemIds = new Set();
+    expandedInvoiceId = null;
+    await loadProducts();
+    await loadPurchaseInvoices();
+  } catch (err) {
+    if (statusEl) statusEl.textContent = '❌ خطأ: ' + err.message;
+  }
+}
+
+async function deletePurchaseInvoice(invoiceId) {
+  if (!confirm('متأكد تريد حذف هاي الفاتورة بالكامل؟ رح يترجّع تأثيرها عن كمية المخزون تلقائيًا، ولا يمكن التراجع عن هالحذف.')) return;
+  const invoice = purchaseInvoicesCache.find(i => i.id === invoiceId);
+  if (!invoice) return;
+  try {
+    for (const it of (invoice.purchase_invoice_items || [])) {
+      if (!it.product_id) continue;
+      const prod = productsCache.find(p => p.id === it.product_id);
+      if (prod) {
+        const newQty = Math.max(0, Number(prod.quantity || 0) - Number(it.quantity || 0));
+        const { error } = await supabase.from('products').update({ quantity: newQty }).eq('id', it.product_id);
+        if (error) throw error;
+      }
+    }
+    const { error: delErr } = await supabase.from('purchase_invoices').delete().eq('id', invoiceId);
+    if (delErr) throw delErr;
+    if (expandedInvoiceId === invoiceId) expandedInvoiceId = null;
+    await loadProducts();
+    await loadPurchaseInvoices();
+  } catch (err) {
+    alert('خطأ بالحذف: ' + err.message);
+  }
+}
 
 // ---------------- طباعة الفاتورة ----------------
 const SHOP_NAME = 'TREND';
