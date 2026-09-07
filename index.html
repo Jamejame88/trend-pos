@@ -349,7 +349,15 @@
             <input type="text" inputmode="numeric" dir="ltr" style="text-align:left" id="paid-input" value="0">
           </div>
           <div class="totals-row"><span>الباقي</span><span id="change-display">0</span></div>
+          <div style="margin-top:8px;">
+            <input type="tel" inputmode="tel" id="customer-phone-input" placeholder="📱 رقم موبايل الزبون (اختياري - لإرسال الفاتورة)" style="width:100%; padding:10px; border-radius:8px; border:1px solid var(--border); font-size:14px;">
+          </div>
           <button class="btn block" id="checkout-btn" style="margin-top:10px;">✔ إتمام عملية البيع</button>
+          <div id="whatsapp-send-wrap" style="display:none; margin-top:10px; padding:10px; border:1px solid #25D366; border-radius:8px; background:#f0fff5;">
+            <div style="font-size:13px; margin-bottom:8px;">📱 الفاتورة جاهزة للإرسال على: <b id="whatsapp-send-phone" dir="ltr"></b></div>
+            <button type="button" class="btn block" id="whatsapp-send-btn" style="background:#25D366;">إرسال الفاتورة على واتساب</button>
+            <button type="button" class="btn secondary tiny" id="whatsapp-dismiss-btn" style="margin-top:6px;">إخفاء</button>
+          </div>
         </div>
         <div class="card">
           <h2>المنتجات</h2>
@@ -1464,6 +1472,11 @@ async function trySubmitPendingSale(p) {
   if (p.customDateVal) {
     await supabase.from('sales').update({ sale_date: new Date(p.customDateVal).toISOString() }).eq('id', saleId);
   }
+  // رقم الزبون المحفوظ بالفاتورة المعلّقة - بينحفظ بقاعدة البيانات بدون فتح واتساب تلقائيًا
+  // (إعادة المحاولة ممكن تكون لكم فاتورة دفعة وحدة، وفتح نوافذ متعددة بينحجب من المتصفح)
+  if (p.waPhone) {
+    await supabase.from('sales').update({ customer_phone: p.waPhone }).eq('id', saleId);
+  }
   if (p.paid < p.total && p.customerName) {
     await supabase.from('debts').insert({
       branch_id: p.branch_id, sale_id: saleId,
@@ -1503,11 +1516,62 @@ $('#pending-sales-retry-btn').addEventListener('click', async () => {
   }
 });
 
+// ---------------- إرسال الفاتورة للزبون على واتساب (اختياري) ----------------
+// بيحوّل الرقم لصيغة دولية يقبلها wa.me: 0912345678 ← 963912345678
+function normalizePhoneForWa(raw) {
+  let d = toEnglishDigits(raw || '').replace(/[^0-9]/g, '');
+  if (!d) return null;
+  if (d.startsWith('00')) d = d.slice(2);
+  if (d.startsWith('963')) return d;
+  if (d.startsWith('09')) return '963' + d.slice(1);
+  if (d.length === 9 && d.startsWith('9')) return '963' + d;
+  if (d.length >= 11) return d; // رقم أجنبي مكتوب بمفتاح دولته
+  return null;
+}
+
+// نص الفاتورة متل ما بيوصل الزبون - بدون أي إعلان أو ترويج
+function buildWhatsAppInvoiceText({ date, items, subtotal, discount, total, saleIdShort }) {
+  const lines = [];
+  lines.push(`*${SHOP_NAME}* - ${SHOP_SUBTITLE}`);
+  lines.push('');
+  lines.push(`التاريخ: ${date}`);
+  if (saleIdShort) lines.push(`رقم الفاتورة: ${saleIdShort}`);
+  lines.push('------------------------');
+  (items || []).forEach(it => {
+    lines.push(`${it.name} × ${it.qty} = ${Number(it.subtotal).toFixed(0)}`);
+  });
+  lines.push('------------------------');
+  if (Number(discount) > 0) {
+    lines.push(`المجموع: ${Number(subtotal).toFixed(0)}`);
+    lines.push(`الخصم: ${Number(discount).toFixed(0)}`);
+  }
+  lines.push(`*الإجمالي: ${Number(total).toFixed(0)} ل.س*`);
+  lines.push('');
+  lines.push('شكرًا لزيارتكم 🌸');
+  return lines.join('\n');
+}
+
+let pendingWaUrl = null;
+function showWhatsAppSend(phone, text) {
+  pendingWaUrl = `https://wa.me/${phone}?text=${encodeURIComponent(text)}`;
+  $('#whatsapp-send-phone').textContent = phone;
+  $('#whatsapp-send-wrap').style.display = 'block';
+}
+function hideWhatsAppSend() {
+  pendingWaUrl = null;
+  $('#whatsapp-send-wrap').style.display = 'none';
+}
+$('#whatsapp-send-btn').addEventListener('click', () => {
+  if (pendingWaUrl) window.open(pendingWaUrl, '_blank');
+});
+$('#whatsapp-dismiss-btn').addEventListener('click', hideWhatsAppSend);
+
 $('#checkout-btn').addEventListener('click', async () => {
   if (!cart.length) { alert('السلة فاضية'); return; }
 
   // منع الضغط المزدوج على الزر أثناء معالجة عملية الدفع - بيتفادى تسجيل نفس الفاتورة مرتين
   // لو الكاشير ضغط الزر أكتر من مرة وهو منتظر رد السيرفر (خصوصًا مع نت بطيء).
+  hideWhatsAppSend(); // تصفير كرت الإرسال من الفاتورة السابقة
   const checkoutBtn = $('#checkout-btn');
   if (checkoutBtn.disabled) return;
   const checkoutBtnOriginalText = checkoutBtn.textContent;
@@ -1579,6 +1643,7 @@ $('#checkout-btn').addEventListener('click', async () => {
         customerName: customerName ? customerName.trim() : null,
         customerPhone: customerPhone ? customerPhone.trim() : null,
         customDateVal: $('#sale-custom-date-input').value || null,
+        waPhone: normalizePhoneForWa($('#customer-phone-input').value),
         queued_at: new Date().toISOString(),
       });
       savePendingSales(pending);
@@ -1589,6 +1654,7 @@ $('#checkout-btn').addEventListener('click', async () => {
       paidManuallyEdited = false;
       $('#paid-input').value = 0;
       $('#sale-custom-date-input').value = '';
+      $('#customer-phone-input').value = '';
       renderCart();
       return;
     }
@@ -1619,6 +1685,19 @@ $('#checkout-btn').addEventListener('click', async () => {
     if (debtErr) alert('تمت عملية البيع، لكن صار خطأ بتسجيل الدين: ' + debtErr.message);
   }
 
+  // حفظ رقم الزبون بالفاتورة + تجهيز إرسالها على واتساب (بس إذا الكاشير كتب رقم)
+  const waPhone = normalizePhoneForWa($('#customer-phone-input').value);
+  if (waPhone) {
+    const { error: phoneErr } = await supabase.from('sales').update({ customer_phone: waPhone }).eq('id', saleId);
+    if (phoneErr) console.error('تعذر حفظ رقم الزبون بالفاتورة:', phoneErr.message);
+    showWhatsAppSend(waPhone, buildWhatsAppInvoiceText({
+      date: new Date().toLocaleString('ar'),
+      items: cart.map(i => ({ name: i.name, qty: i.qty, subtotal: i.subtotal })),
+      subtotal, discount, total,
+      saleIdShort: saleId ? String(saleId).slice(0, 8) : '',
+    }));
+  }
+
   alert(`تمت عملية البيع بنجاح ✅\nالإجمالي: ${total.toFixed(0)}\nالباقي: ${change.toFixed(0)}`);
 
   if (confirm('🖨 بدك تطبع الفاتورة؟')) {
@@ -1644,6 +1723,7 @@ $('#checkout-btn').addEventListener('click', async () => {
   paidManuallyEdited = false;
   $('#paid-input').value = 0;
   $('#sale-custom-date-input').value = '';
+  $('#customer-phone-input').value = '';
   renderCart();
   await loadProducts();
   await loadTodaySoldItems();
