@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>نقطة بيع - محل الهدايا (ويب)</title>
+<title>نقطة بيع - بيوتي غاليري</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#1a6b3c">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
@@ -266,7 +266,7 @@
 <!-- ==================== شاشة تسجيل الدخول ==================== -->
 <div id="login-screen" class="screen active">
   <div class="login-box">
-    <h1>🛍 نقطة بيع - محل الهدايا</h1>
+    <h1>🛍 نقطة بيع - بيوتي غاليري</h1>
     <form id="login-form">
       <div class="field">
         <label>اسم المستخدم</label>
@@ -304,6 +304,7 @@
     <button class="tab-btn owner-only" data-tab="report">التقرير 🔒</button>
     <button class="tab-btn owner-only" data-tab="log">سجل العمليات</button>
     <button class="tab-btn owner-only" data-tab="employees">الموظفين</button>
+    <button class="tab-btn owner-only" data-tab="settings">ضبط البرنامج</button>
   </nav>
 
   <main>
@@ -442,18 +443,6 @@
         <input type="file" id="bulk-image-input" accept="image/*" multiple>
         <button type="button" class="btn secondary" id="bulk-image-upload-btn" style="margin-top:8px;">🖼️ ابدأ رفع الدفعة</button>
         <div id="bulk-image-status" style="font-size:13px; margin-top:10px; white-space:pre-line;"></div>
-      </div>
-
-      <div class="card">
-        <h2>🔀 نقل كل منتجات هاد الفرع لفرع تاني</h2>
-        <p style="font-size:13px; color:var(--muted); margin-top:0;">مفيد وقت إغلاق فرع ودمجه بفرع تاني عشان يصير محل واحد - بينقل كل المنتجات (بكمياتها وأسعارها) للفرع المختار، ويفضى هاد الفرع منها.</p>
-        <div class="form-grid">
-          <div class="field">
-            <label>انقل منتجات "<span id="move-from-branch-name">-</span>" إلى:</label>
-            <select id="move-target-branch"></select>
-          </div>
-        </div>
-        <button class="btn danger" id="move-products-btn">🔀 نقل كل المنتجات الآن</button>
       </div>
 
       <div class="card">
@@ -779,6 +768,31 @@
             <tbody id="employees-list"></tbody>
           </table>
         </div>
+      </div>
+    </section>
+
+    <!-- ---------- ضبط البرنامج (صاحب المحل، محمي بكلمة سر منفصلة) ---------- -->
+    <section id="tab-settings" class="tab-panel">
+      <div class="card" id="settings-locked-card">
+        <h2>🔒 هاد القسم محمي بكلمة سر منفصلة</h2>
+        <p style="font-size:13px; color:var(--muted);">أول مرة؟ اكتب أي كلمة سر جديدة وبتصير هي كلمة سر "ضبط البرنامج" من هلق وطالع.</p>
+        <div class="field"><label>كلمة سر ضبط البرنامج</label><input type="password" id="settings-password-input"></div>
+        <button class="btn" id="settings-unlock-btn">فتح ضبط البرنامج</button>
+        <div class="error-text" id="settings-password-error"></div>
+      </div>
+      <div id="settings-content" style="display:none;">
+        <div class="card">
+          <h2>🔀 نقل كل منتجات هاد الفرع لفرع تاني</h2>
+          <p style="font-size:13px; color:var(--muted); margin-top:0;">مفيد وقت إغلاق فرع ودمجه بفرع تاني عشان يصير محل واحد - بينقل كل المنتجات (بكمياتها وأسعارها) للفرع المختار، ويفضى هاد الفرع منها.</p>
+          <div class="form-grid">
+            <div class="field">
+              <label>انقل منتجات "<span id="move-from-branch-name">-</span>" إلى:</label>
+              <select id="move-target-branch"></select>
+            </div>
+          </div>
+          <button class="btn danger" id="move-products-btn">🔀 نقل كل المنتجات الآن</button>
+        </div>
+        <button class="btn secondary" id="settings-lock-btn">🔒 إغلاق ضبط البرنامج</button>
       </div>
     </section>
   </main>
@@ -2440,6 +2454,43 @@ $('#report-lock-btn').addEventListener('click', () => {
   reportUnlocked = false;
   $('#report-content').style.display = 'none';
   $('#report-locked-card').style.display = 'block';
+});
+
+// ---------------- ضبط البرنامج - المحمي بكلمة سر منفصلة (صاحب المحل) ----------------
+let settingsUnlocked = false;
+
+$('#settings-unlock-btn').addEventListener('click', async () => {
+  const entered = $('#settings-password-input').value;
+  const errBox = $('#settings-password-error');
+  errBox.textContent = '';
+  const { data, error } = await supabase.from('settings').select('*').eq('branch_id', activeBranchId).eq('key', 'settings_password').maybeSingle();
+  if (error) { errBox.textContent = 'خطأ: ' + error.message; return; }
+
+  if (!data) {
+    if (!entered) { errBox.textContent = 'اكتب كلمة سر لتعيينها أول مرة'; return; }
+    const { error: insErr } = await supabase.from('settings').insert({ branch_id: activeBranchId, key: 'settings_password', value: entered });
+    if (insErr) { errBox.textContent = 'خطأ: ' + insErr.message; return; }
+    alert('تم تعيين كلمة سر "ضبط البرنامج" لأول مرة لهاد الفرع - احفظها منيح.');
+    unlockSettings();
+    return;
+  }
+  if (data.value !== entered) { errBox.textContent = 'كلمة السر غلط'; return; }
+  unlockSettings();
+});
+
+function unlockSettings() {
+  settingsUnlocked = true;
+  $('#settings-password-error').textContent = '';
+  $('#settings-password-input').value = '';
+  $('#settings-locked-card').style.display = 'none';
+  $('#settings-content').style.display = 'block';
+  renderMoveBranchPicker();
+}
+
+$('#settings-lock-btn').addEventListener('click', () => {
+  settingsUnlocked = false;
+  $('#settings-content').style.display = 'none';
+  $('#settings-locked-card').style.display = 'block';
 });
 
 // ---------------- التقرير اليومي (صاحب المحل) ----------------
