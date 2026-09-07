@@ -354,8 +354,8 @@
           </div>
           <button class="btn block" id="checkout-btn" style="margin-top:10px;">✔ إتمام عملية البيع</button>
           <div id="whatsapp-send-wrap" style="display:none; margin-top:10px; padding:10px; border:1px solid #25D366; border-radius:8px; background:#f0fff5;">
-            <div style="font-size:13px; margin-bottom:8px;">📱 الفاتورة جاهزة للإرسال على: <b id="whatsapp-send-phone" dir="ltr"></b></div>
-            <button type="button" class="btn block" id="whatsapp-send-btn" style="background:#25D366;">إرسال الفاتورة على واتساب</button>
+            <div style="font-size:13px; margin-bottom:8px;">📱 فاتورة الزبون <b id="whatsapp-send-phone" dir="ltr"></b> — لو ما فتح واتساب تلقائيًا، اضغط تحت:</div>
+            <button type="button" class="btn block" id="whatsapp-send-btn" style="background:#25D366;">فتح واتساب وإرسال الفاتورة</button>
             <button type="button" class="btn secondary tiny" id="whatsapp-dismiss-btn" style="margin-top:6px;">إخفاء</button>
           </div>
         </div>
@@ -1552,8 +1552,20 @@ function buildWhatsAppInvoiceText({ date, items, subtotal, discount, total, sale
 }
 
 let pendingWaUrl = null;
+let waWin = null;      // نافذة واتساب المفتوحة لحظة الضغط (قبل انتظار السيرفر)
+let waWinUsed = false; // صارت تحمل محادثة فعلية؟ لو لأ منسكرها بالنهاية
+// على الجوال: رابط تطبيق واتساب مباشرة (ما بيفتح متصفح أصلًا).
+// على الكمبيوتر: رابط واتساب ويب المباشر - بيفتح المحادثة فورًا بدون
+// صفحة "Continue to Chat" الوسيطة يلي بيعرضها wa.me كل مرة.
+const WA_IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+function buildWaLink(phone, text) {
+  const t = encodeURIComponent(text);
+  return WA_IS_MOBILE
+    ? `whatsapp://send?phone=${phone}&text=${t}`
+    : `https://web.whatsapp.com/send?phone=${phone}&text=${t}`;
+}
 function showWhatsAppSend(phone, text) {
-  pendingWaUrl = `https://wa.me/${phone}?text=${encodeURIComponent(text)}`;
+  pendingWaUrl = buildWaLink(phone, text);
   $('#whatsapp-send-phone').textContent = phone;
   $('#whatsapp-send-wrap').style.display = 'block';
 }
@@ -1562,7 +1574,16 @@ function hideWhatsAppSend() {
   $('#whatsapp-send-wrap').style.display = 'none';
 }
 $('#whatsapp-send-btn').addEventListener('click', () => {
-  if (pendingWaUrl) window.open(pendingWaUrl, '_blank');
+  if (!pendingWaUrl) return;
+  if (WA_IS_MOBILE) {
+    // بيسلّم الرابط لتطبيق واتساب - صفحة نقطة البيع بتضل مفتوحة ورا التطبيق
+    window.location.href = pendingWaUrl;
+  } else {
+    // اسم ثابت للنافذة = المتصفح بيعيد استخدام نفس التبويب كل مرة
+    // بدل ما يفتح تبويب جديد لكل فاتورة
+    const w = window.open(pendingWaUrl, 'trend_whatsapp');
+    if (w) w.focus();
+  }
 });
 $('#whatsapp-dismiss-btn').addEventListener('click', hideWhatsAppSend);
 
@@ -1572,6 +1593,19 @@ $('#checkout-btn').addEventListener('click', async () => {
   // منع الضغط المزدوج على الزر أثناء معالجة عملية الدفع - بيتفادى تسجيل نفس الفاتورة مرتين
   // لو الكاشير ضغط الزر أكتر من مرة وهو منتظر رد السيرفر (خصوصًا مع نت بطيء).
   hideWhatsAppSend(); // تصفير كرت الإرسال من الفاتورة السابقة
+
+  // مهم: منفتح نافذة واتساب من هون بالضبط - أي بلحظة ضغطة المستخدم نفسها.
+  // لو فتحناها بعد ما ننتظر رد السيرفر (await)، المتصفح بيحجبها لأنه ما عاد
+  // يعتبرها ناتجة عن تفاعل بشري. هيك بتصير العملية كلها بضغطة وحدة.
+  waWinUsed = false;
+  const waPhonePre = normalizePhoneForWa($('#customer-phone-input').value);
+  if (waPhonePre && !WA_IS_MOBILE) {
+    waWin = window.open('', 'trend_whatsapp');
+    try {
+      if (waWin) waWin.document.write('<div style="font-family:sans-serif;direction:rtl;text-align:center;padding:40px;color:#555">⏳ جارٍ تجهيز الفاتورة...</div>');
+    } catch (e) { /* النافذة أصلًا على واتساب (نطاق تاني) - ما فينا نكتب فيها، وهاد عادي */ }
+  }
+
   const checkoutBtn = $('#checkout-btn');
   if (checkoutBtn.disabled) return;
   const checkoutBtnOriginalText = checkoutBtn.textContent;
@@ -1685,38 +1719,33 @@ $('#checkout-btn').addEventListener('click', async () => {
     if (debtErr) alert('تمت عملية البيع، لكن صار خطأ بتسجيل الدين: ' + debtErr.message);
   }
 
-  // حفظ رقم الزبون بالفاتورة + تجهيز إرسالها على واتساب (بس إذا الكاشير كتب رقم)
+  alert(`تمت عملية البيع بنجاح ✅\nالإجمالي: ${total.toFixed(0)}\nالباقي: ${change.toFixed(0)}`);
+
+  // حفظ رقم الزبون بالفاتورة + فتح واتساب تلقائيًا (بس إذا الكاشير كتب رقم)
   const waPhone = normalizePhoneForWa($('#customer-phone-input').value);
   if (waPhone) {
     const { error: phoneErr } = await supabase.from('sales').update({ customer_phone: waPhone }).eq('id', saleId);
     if (phoneErr) console.error('تعذر حفظ رقم الزبون بالفاتورة:', phoneErr.message);
-    showWhatsAppSend(waPhone, buildWhatsAppInvoiceText({
+    const waText = buildWhatsAppInvoiceText({
       date: new Date().toLocaleString('ar'),
       items: cart.map(i => ({ name: i.name, qty: i.qty, subtotal: i.subtotal })),
       subtotal, discount, total,
       saleIdShort: saleId ? String(saleId).slice(0, 8) : '',
-    }));
+    });
+    showWhatsAppSend(waPhone, waText); // كرت احتياطي - بيفيد بس لو المتصفح حجب الفتح التلقائي
+    if (WA_IS_MOBILE) {
+      window.location.href = buildWaLink(waPhone, waText); // بيسلّم لتطبيق واتساب
+    } else if (waWin) {
+      try {
+        waWin.location.href = buildWaLink(waPhone, waText);
+        waWin.focus();
+        waWinUsed = true;
+      } catch (e) { /* انحجبت أو انسكرت - الكرت الاحتياطي تحت بيغطي الحالة */ }
+    }
   }
 
-  alert(`تمت عملية البيع بنجاح ✅\nالإجمالي: ${total.toFixed(0)}\nالباقي: ${change.toFixed(0)}`);
-
-  if (confirm('🖨 بدك تطبع الفاتورة؟')) {
-    const branchName = (branches.find(b => b.id === activeBranchId) || {}).name || '';
-    const cashierName = currentProfile.full_name || currentProfile.username || '';
-    printReceiptHtml(buildReceiptHtml({
-      branchName,
-      date: new Date().toLocaleString('ar'),
-      cashierName,
-      items: cart.map(i => ({ product_name: i.name, quantity: i.qty, unit_price: i.price, subtotal: i.subtotal })),
-      subtotal,
-      discount,
-      total,
-      paid,
-      change,
-      saleIdShort: saleId ? String(saleId).slice(0, 8) : '',
-      customerName: customerName ? customerName.trim() : '',
-    }));
-  }
+  // سؤال "بدك تطبع الفاتورة؟" اتلغى بطلب صاحب المحل - ما عاد يطلع بعد كل بيعة.
+  // الطباعة لسا متوفرة وقت الحاجة من زر "🖨 طباعة" بتبويب "سجل المبيعات".
 
   cart = [];
   $('#discount-input').value = 0;
@@ -1733,6 +1762,9 @@ $('#checkout-btn').addEventListener('click', async () => {
     // بيتنفّذ دايمًا (نجاح، خطأ، أو أي return بنص العملية) - الزر ما بيضل معطّل لو صار خطأ
     checkoutBtn.disabled = false;
     checkoutBtn.textContent = checkoutBtnOriginalText;
+    // لو العملية ما كمّلت (نقص مخزون، إلغاء، خطأ) منسكّر نافذة واتساب الفاضية
+    if (waWin && !waWinUsed) { try { waWin.close(); } catch (e) {} }
+    waWin = null;
   }
 });
 
