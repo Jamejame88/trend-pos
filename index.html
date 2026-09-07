@@ -351,6 +351,13 @@
           <div class="totals-row"><span>الباقي</span><span id="change-display">0</span></div>
           <div style="margin-top:8px;">
             <input type="tel" inputmode="tel" id="customer-phone-input" placeholder="📱 رقم موبايل الزبون (اختياري - لإرسال الفاتورة)" style="width:100%; padding:10px; border-radius:8px; border:1px solid var(--border); font-size:14px;">
+            <div style="display:flex; align-items:center; gap:6px; margin-top:5px; font-size:11.5px; color:var(--muted);">
+              <span>افتح واتساب بـ:</span>
+              <select id="wa-open-mode" style="padding:3px 6px; border-radius:6px; border:1px solid var(--border); font-size:11.5px;">
+                <option value="app">تطبيق واتساب (بدون تبويب متصفح)</option>
+                <option value="web">متصفح - واتساب ويب</option>
+              </select>
+            </div>
           </div>
           <button class="btn block" id="checkout-btn" style="margin-top:10px;">✔ إتمام عملية البيع</button>
           <div id="whatsapp-send-wrap" style="display:none; margin-top:10px; padding:10px; border:1px solid #25D366; border-radius:8px; background:#f0fff5;">
@@ -1558,12 +1565,29 @@ let waWinUsed = false; // صارت تحمل محادثة فعلية؟ لو لأ 
 // على الكمبيوتر: رابط واتساب ويب المباشر - بيفتح المحادثة فورًا بدون
 // صفحة "Continue to Chat" الوسيطة يلي بيعرضها wa.me كل مرة.
 const WA_IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+const WA_MODE_KEY = 'trend_wa_open_mode';
+
+// "app" = يفتح تطبيق واتساب مباشرة (بدون أي تبويب متصفح - الحل الأنضف لو التطبيق منزّل).
+// "web" = واتساب ويب بالمتصفح. ملاحظة: واتساب ويب بيعزل نفسه عن الصفحة يلي فتحته
+// (سياسة COOP)، فالمتصفح ما بيقدر يعيد استخدام نفس التبويب - كل فاتورة بتفتح تبويب جديد.
+function getWaOpenMode() {
+  try { return localStorage.getItem(WA_MODE_KEY) || 'app'; } catch (e) { return 'app'; }
+}
 function buildWaLink(phone, text) {
   const t = encodeURIComponent(text);
-  return WA_IS_MOBILE
-    ? `whatsapp://send?phone=${phone}&text=${t}`
-    : `https://web.whatsapp.com/send?phone=${phone}&text=${t}`;
+  if (WA_IS_MOBILE || getWaOpenMode() === 'app') return `whatsapp://send?phone=${phone}&text=${t}`;
+  return `https://web.whatsapp.com/send?phone=${phone}&text=${t}`;
 }
+function waUsesApp() { return WA_IS_MOBILE || getWaOpenMode() === 'app'; }
+
+(function initWaOpenMode() {
+  const sel = $('#wa-open-mode');
+  if (!sel) return;
+  sel.value = getWaOpenMode();
+  sel.addEventListener('change', () => {
+    try { localStorage.setItem(WA_MODE_KEY, sel.value); } catch (e) {}
+  });
+})();
 function showWhatsAppSend(phone, text) {
   pendingWaUrl = buildWaLink(phone, text);
   $('#whatsapp-send-phone').textContent = phone;
@@ -1575,7 +1599,7 @@ function hideWhatsAppSend() {
 }
 $('#whatsapp-send-btn').addEventListener('click', () => {
   if (!pendingWaUrl) return;
-  if (WA_IS_MOBILE) {
+  if (waUsesApp()) {
     // بيسلّم الرابط لتطبيق واتساب - صفحة نقطة البيع بتضل مفتوحة ورا التطبيق
     window.location.href = pendingWaUrl;
   } else {
@@ -1590,6 +1614,19 @@ $('#whatsapp-dismiss-btn').addEventListener('click', hideWhatsAppSend);
 $('#checkout-btn').addEventListener('click', async () => {
   if (!cart.length) { alert('السلة فاضية'); return; }
 
+  // تنبيه قبل إتمام البيع لو ما انكتب رقم موبايل (أو الرقم ناقص/غلط).
+  // بينبّه بس - الكاشير فيه يكمّل عادي لو الزبون ما بدو يعطي رقمه.
+  const phoneRaw = ($('#customer-phone-input').value || '').trim();
+  if (!normalizePhoneForWa(phoneRaw)) {
+    const warnMsg = phoneRaw
+      ? `⚠ الرقم "${phoneRaw}" مو مكتمل أو غير صالح.\n\nالفاتورة ما رح تنبعت على واتساب، والرقم ما رح ينحفظ.\n\nبدك تكمّل البيع هيك؟`
+      : '📱 ما كتبت رقم موبايل الزبون.\n\nالفاتورة ما رح تنبعت على واتساب، وما رح ينحفظ رقم للزبون.\n\nبدك تكمّل البيع بدون رقم؟';
+    if (!confirm(warnMsg)) {
+      $('#customer-phone-input').focus();
+      return;
+    }
+  }
+
   // منع الضغط المزدوج على الزر أثناء معالجة عملية الدفع - بيتفادى تسجيل نفس الفاتورة مرتين
   // لو الكاشير ضغط الزر أكتر من مرة وهو منتظر رد السيرفر (خصوصًا مع نت بطيء).
   hideWhatsAppSend(); // تصفير كرت الإرسال من الفاتورة السابقة
@@ -1599,7 +1636,7 @@ $('#checkout-btn').addEventListener('click', async () => {
   // يعتبرها ناتجة عن تفاعل بشري. هيك بتصير العملية كلها بضغطة وحدة.
   waWinUsed = false;
   const waPhonePre = normalizePhoneForWa($('#customer-phone-input').value);
-  if (waPhonePre && !WA_IS_MOBILE) {
+  if (waPhonePre && !waUsesApp()) {
     waWin = window.open('', 'trend_whatsapp');
     try {
       if (waWin) waWin.document.write('<div style="font-family:sans-serif;direction:rtl;text-align:center;padding:40px;color:#555">⏳ جارٍ تجهيز الفاتورة...</div>');
@@ -1733,8 +1770,9 @@ $('#checkout-btn').addEventListener('click', async () => {
       saleIdShort: saleId ? String(saleId).slice(0, 8) : '',
     });
     showWhatsAppSend(waPhone, waText); // كرت احتياطي - بيفيد بس لو المتصفح حجب الفتح التلقائي
-    if (WA_IS_MOBILE) {
-      window.location.href = buildWaLink(waPhone, waText); // بيسلّم لتطبيق واتساب
+    if (waUsesApp()) {
+      // بيسلّم الرابط لتطبيق واتساب - ما بينفتح ولا تبويب متصفح، وصفحة نقطة البيع بتضل مكانها
+      window.location.href = buildWaLink(waPhone, waText);
     } else if (waWin) {
       try {
         waWin.location.href = buildWaLink(waPhone, waText);
