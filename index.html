@@ -2424,7 +2424,7 @@ async function loadCustomers() {
       if (!ph) return;
       if (!byPhone[ph]) byPhone[ph] = { phone: ph, count: 0, prior: 0, total: 0, first: null, last: null };
       byPhone[ph].prior += Number(ct.prior_purchases) || 0;
-      if (ct.name && !nameByPhone[ph]) nameByPhone[ph] = ct.name;
+      if (ct.name) nameByPhone[ph] = ct.name; // الاسم المكتوب يدويًا أولى من اسم الديون
       byPhone[ph].legacy = true;
     });
   }
@@ -2435,6 +2435,8 @@ async function loadCustomers() {
       (a.first ? new Date(a.first) : Infinity) - (b.first ? new Date(b.first) : Infinity));
   renderCustomers();
 }
+
+let editingCustomerPhone = null; // رقم الزبون يلي عم ينكتب اسمه حاليًا بالجدول
 
 function renderCustomers() {
   const listEl = $('#customers-list');
@@ -2451,7 +2453,14 @@ function renderCustomers() {
   listEl.innerHTML = rows.map(c => `
     <tr>
       <td dir="ltr" style="font-weight:bold;">${escapeHtml(c.phone)}</td>
-      <td>${escapeHtml(c.name || '-')}${c.legacy && !c.count ? ' <small style="color:var(--muted);">(مستورد)</small>' : ''}</td>
+      <td>${c.phone === editingCustomerPhone
+        ? `<div style="display:flex; gap:4px; align-items:center;">
+             <input type="text" class="cust-name-input" value="${escapeAttr(c.name || '')}" placeholder="اسم الزبون" style="width:110px; padding:4px; border-radius:6px; border:1px solid var(--border); font-size:12px;">
+             <button class="btn tiny cust-name-save" data-phone="${escapeAttr(c.phone)}">💾</button>
+             <button class="btn tiny secondary cust-name-cancel">✕</button>
+           </div>`
+        : `${escapeHtml(c.name || '-')}${c.legacy && !c.count ? ' <small style="color:var(--muted);">(مستورد)</small>' : ''}
+           <button class="btn tiny secondary cust-name-edit" data-phone="${escapeAttr(c.phone)}" title="اكتب/عدّل اسم هاد الزبون">✏</button>`}</td>
       <td><b style="color:${c.totalCount >= 3 ? 'var(--green)' : 'inherit'};">${c.totalCount}</b>${c.prior ? ` <small style="color:var(--muted);">(${c.prior} سابقة)</small>` : ''}</td>
       <td>${d(c.first)}</td>
       <td>${d(c.last)}</td>
@@ -2459,6 +2468,51 @@ function renderCustomers() {
     </tr>
   `).join('') || `<tr><td colspan="6">${q ? 'ما في زبون مطابق للبحث' : 'لسا ما انسجل ولا رقم زبون - اكتب رقم الزبون وقت البيع وبيبلش يتعبى هون تلقائيًا'}</td></tr>`;
 }
+
+// كتابة/تعديل اسم الزبون مباشرة بالجدول - بينحفظ بجدول customer_contacts
+// (upsert: بينشئ صف لو الزبون إجا من المبيعات بس، وبيحدّث الاسم لو صفّه موجود
+// بدون ما يلمس عدد العمليات السابقة).
+$('#customers-list').addEventListener('click', async (e) => {
+  const editBtn = e.target.closest('.cust-name-edit');
+  if (editBtn) {
+    editingCustomerPhone = editBtn.dataset.phone;
+    renderCustomers();
+    const inp = document.querySelector('.cust-name-input');
+    if (inp) { inp.focus(); inp.select(); }
+    return;
+  }
+  if (e.target.closest('.cust-name-cancel')) {
+    editingCustomerPhone = null;
+    renderCustomers();
+    return;
+  }
+  const saveBtn = e.target.closest('.cust-name-save');
+  if (saveBtn) {
+    const phone = saveBtn.dataset.phone;
+    const input = saveBtn.closest('td').querySelector('.cust-name-input');
+    const name = (input ? input.value : '').trim();
+    saveBtn.disabled = true;
+    const { error } = await supabase.from('customer_contacts').upsert(
+      { branch_id: activeBranchId, phone, name: name || null },
+      { onConflict: 'branch_id,phone' }
+    );
+    if (error) {
+      alert('ما انحفظ الاسم: ' + error.message +
+        '\n(تأكد إنك نفّذت أمر SQL تبع جدول customer_contacts بـSupabase)');
+      saveBtn.disabled = false;
+      return;
+    }
+    editingCustomerPhone = null;
+    await loadCustomers();
+  }
+});
+
+// Enter بيحفظ، Escape بيلغي - أسرع للكاشير من الضغط على الأزرار
+$('#customers-list').addEventListener('keydown', (e) => {
+  if (!e.target.classList.contains('cust-name-input')) return;
+  if (e.key === 'Enter') { e.preventDefault(); e.target.closest('td').querySelector('.cust-name-save').click(); }
+  if (e.key === 'Escape') { editingCustomerPhone = null; renderCustomers(); }
+});
 
 $('#customers-search').addEventListener('input', renderCustomers);
 $('#customers-refresh-btn').addEventListener('click', loadCustomers);
