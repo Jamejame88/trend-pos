@@ -640,7 +640,9 @@
           الزبون بيختار صنف واحد منها وقت الاستبدال، والكمية بتنخصم من المخزون تلقائيًا.
           <b>اربط أصناف من الفرع الحالي</b> (الأصناف من فرع تاني ما بتظهر للكاشير هون).
         </p>
-        <div id="points-rewards-list"></div>
+        <button type="button" class="btn secondary tiny" id="points-diag-btn">🩺 افحص الاتصال بجداول النقاط</button>
+        <pre id="points-diag-out" style="display:none; white-space:pre-wrap; font-size:12px; background:#f3f5f7; border:1px solid var(--border); border-radius:8px; padding:10px; margin-top:8px;"></pre>
+        <div id="points-rewards-list" style="margin-top:10px;"></div>
       </div>
 
       <div class="card">
@@ -1141,8 +1143,12 @@ $$('.tab-btn').forEach(btn => {
 // ---------------- تحميل البيانات ----------------
 async function refreshAll() {
   await loadProducts();
-  await loadPointsConfig();
-  await loadPointsRewards();
+  try { await loadPointsConfig(); } catch (e) { console.error('points_config:', e); }
+  try { await loadPointsRewards(); } catch (e) {
+    console.error('points_rewards:', e);
+    pointsLoadError = e.message || String(e);
+    renderPointsRewards();
+  }
   renderPendingSales();
   await loadTodaySoldItems();
   if (currentProfile.role === 'owner') {
@@ -1156,7 +1162,7 @@ async function refreshAll() {
     await loadPurchaseInvoices();
     await loadActivityLog();
     await loadEmployees();
-    await loadPointsLedger();
+    try { await loadPointsLedger(); } catch (e) { console.error('points_ledger:', e); }
     if (reportUnlocked) { await loadReportData(); await loadDailyReport(); }
   }
 }
@@ -2663,6 +2669,34 @@ $('#points-rewards-list')?.addEventListener('click', async (e) => {
   }
 });
 
+// أداة فحص: بتجرب كل جدول لحاله وبتكتب النتيجة عالشاشة - عشان نعرف وين المشكلة
+// بدون ما نحتاج نفتح أدوات المطوّر بالمتصفح.
+$('#points-diag-btn')?.addEventListener('click', async () => {
+  const out = $('#points-diag-out');
+  out.style.display = 'block';
+  out.textContent = '⏳ عم يفحص...';
+  const lines = [];
+  const tables = ['points_config', 'points_rewards', 'points_reward_items', 'points_ledger'];
+  for (const t of tables) {
+    try {
+      const { data, error } = await supabase.from(t).select('*').limit(5);
+      lines.push(error ? `❌ ${t}: ${error.message}` : `✅ ${t}: قرأ ${(data || []).length} صف`);
+    } catch (err) {
+      lines.push(`❌ ${t}: ${err.message}`);
+    }
+  }
+  try {
+    const { error } = await supabase.from('points_rewards')
+      .select('*, points_reward_items(id, product_id)').limit(1);
+    lines.push(error ? `❌ الربط بين المحطات وأصنافها: ${error.message}` : '✅ الربط بين المحطات وأصنافها شغّال');
+  } catch (err) {
+    lines.push(`❌ الربط: ${err.message}`);
+  }
+  lines.push(`— المحطات المحمّلة حاليًا بالذاكرة: ${pointsRewards.length}`);
+  lines.push(`— عدد منتجات الفرع الحالي: ${productsCache.length}`);
+  out.textContent = lines.join('\n');
+});
+
 // ---- الرصيد ----
 async function fetchBalance(phone) {
   const { data, error } = await supabase.from('points_ledger').select('delta').eq('phone', phone);
@@ -2811,7 +2845,13 @@ async function loadPointsLedger() {
   if (!currentProfile || currentProfile.role !== 'owner') return;
   const { data, error } = await supabase.from('points_ledger').select('*')
     .order('created_at', { ascending: false }).limit(200);
-  if (error) { console.error(error); return; }
+  if (error) {
+    console.error(error);
+    const msg = `<tr><td colspan="5" style="color:var(--red);">تعذّر قراءة الحركات: ${escapeHtml(error.message)}</td></tr>`;
+    $('#points-ledger-list').innerHTML = msg;
+    $('#points-orphan-list').innerHTML = msg;
+    return;
+  }
   const rows = data || [];
   const nameOf = (id) => {
     const e = employeesCache.find(x => x.id === id);
