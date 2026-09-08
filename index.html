@@ -298,6 +298,7 @@
     <button class="tab-btn owner-only" data-tab="products">المنتجات</button>
     <button class="tab-btn owner-only" data-tab="history">سجل المبيعات</button>
     <button class="tab-btn owner-only" data-tab="debts">الديون</button>
+    <button class="tab-btn owner-only" data-tab="customers">الزباين</button>
     <button class="tab-btn owner-only" data-tab="expenses">المصاريف</button>
     <button class="tab-btn owner-only" data-tab="returns">المرتجعات</button>
     <button class="tab-btn owner-only" data-tab="purchases">فواتير التوريد</button>
@@ -558,6 +559,50 @@
             <tbody id="customers-summary-list"></tbody>
           </table>
         </div>
+      </div>
+    </section>
+
+    <!-- ---------- الزباين (صاحب المحل) - مبني من أرقام الفواتير ---------- -->
+    <section id="tab-customers" class="tab-panel">
+      <div class="card">
+        <h2>👥 قاعدة الزباين (من أرقام الفواتير)</h2>
+        <p style="font-size:13px; color:var(--muted); margin-top:0;">
+          كل زبون انكتب رقمه بفاتورة واحدة على الأقل بهاد الفرع - مجمّع حسب الرقم.
+          هاد الجدول هو أساس برنامج النقاط والعضوية: منه بتعرف مين اشترى كم مرة ومن إيمتى.
+          <b>الاسم</b> بيظهر بس للزباين يلي انسجّل عليهم دين مرة (لأنه البيع الكامل ما بينكتب فيه اسم).
+        </p>
+        <div class="form-grid" style="margin-bottom:10px;">
+          <div>عدد الزباين: <strong id="customers-count">0</strong></div>
+          <div>زباين متكررين (مرتين فأكتر): <strong id="customers-repeat-count">0</strong></div>
+          <div>إجمالي مشترياتهم: <strong id="customers-grand-total">0</strong></div>
+        </div>
+        <input type="text" id="customers-search" placeholder="🔍 بحث برقم الموبايل أو الاسم..." style="width:100%; padding:10px; border-radius:8px; border:1px solid var(--border); margin-bottom:10px; font-size:14px;">
+        <button type="button" class="btn secondary tiny" id="customers-copy-btn">📋 نسخ كل الأرقام</button>
+        <button type="button" class="btn secondary tiny" id="customers-refresh-btn">🔄 تحديث</button>
+        <span id="customers-copy-status" style="font-size:12px; color:var(--muted); margin-right:8px;"></span>
+        <div style="max-height:60vh; overflow-y:auto; overflow-x:auto; margin-top:10px;">
+          <table>
+            <thead><tr><th>الرقم</th><th>الاسم</th><th>عدد مرات الشراء</th><th>أول عملية</th><th>آخر عملية</th><th>إجمالي المشتريات</th></tr></thead>
+            <tbody id="customers-list"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>📥 استيراد أرقام قديمة (دفعة وحدة)</h2>
+        <p style="font-size:13px; color:var(--muted); margin-top:0;">
+          الصق الأرقام هون - رقم بكل سطر (أو مفصولين بفاصلة/مسافة). بينحفظوا بجدول جهات الاتصال
+          <b>بدون ما ينكتب أي فاتورة وهمية</b>، فتقاريرك وأرباحك ما بتتأثر أبدًا.
+          الرقم الموجود أصلًا ما بينتكرر - بينتحدث بس.
+        </p>
+        <textarea id="contacts-import-text" rows="6" placeholder="0912345678&#10;0987654321&#10;..." style="width:100%; padding:10px; border-radius:8px; border:1px solid var(--border); font-size:14px; font-family:inherit;"></textarea>
+        <label style="display:flex; align-items:center; gap:6px; margin:8px 0; font-size:13px;">
+          <input type="checkbox" id="contacts-count-dupes" checked style="width:auto;">
+          احسب الرقم المكرر بالقائمة كعمليات شراء سابقة (رقم مكتوب 3 مرات = 3 عمليات)
+        </label>
+        <button type="button" class="btn secondary" id="contacts-preview-btn">🔍 معاينة</button>
+        <button type="button" class="btn" id="contacts-import-btn">💾 استيراد الأرقام</button>
+        <div id="contacts-import-status" style="margin-top:10px; font-size:13px; white-space:pre-line;"></div>
       </div>
     </section>
 
@@ -1030,6 +1075,7 @@ async function refreshAll() {
   if (currentProfile.role === 'owner') {
     await loadSalesHistory();
     await loadDebts();
+    await loadCustomers();
     await loadExpenses();
     await loadReturnSalePicker();
     await loadSupplierReturnProductPicker();
@@ -1794,7 +1840,7 @@ $('#checkout-btn').addEventListener('click', async () => {
   renderCart();
   await loadProducts();
   await loadTodaySoldItems();
-  if (currentProfile.role === 'owner') { await loadSalesHistory(); await loadDebts(); }
+  if (currentProfile.role === 'owner') { await loadSalesHistory(); await loadDebts(); await loadCustomers(); }
 
   } finally {
     // بيتنفّذ دايمًا (نجاح، خطأ، أو أي return بنص العملية) - الزر ما بيضل معطّل لو صار خطأ
@@ -2331,6 +2377,159 @@ $('#debts-list').addEventListener('click', async (e) => {
 
   await loadDebts();
   await loadActivityLog();
+});
+
+// ---------------- قاعدة الزباين (من أرقام الفواتير) ----------------
+// بتتبنى من عمود sales.customer_phone يلي بينتعبى من خانة رقم الموبايل وقت البيع.
+// الأسماء بتجي من جدول الديون (الرقم بينطبّع لنفس صيغة الفواتير قبل المطابقة).
+let customersCache = [];
+
+async function loadCustomers() {
+  if (!currentProfile || currentProfile.role !== 'owner') return;
+  const { data, error } = await supabase
+    .from('sales')
+    .select('customer_phone, sale_date, total')
+    .eq('branch_id', activeBranchId)
+    .eq('status', 'completed')
+    .not('customer_phone', 'is', null)
+    .order('sale_date', { ascending: true })
+    .limit(5000);
+  if (error) { console.error(error); return; }
+
+  const nameByPhone = {};
+  (debtsCache || []).forEach((d) => {
+    const norm = normalizePhoneForWa(d.customer_phone || '');
+    if (norm && d.customer_name && !nameByPhone[norm]) nameByPhone[norm] = d.customer_name;
+  });
+
+  const byPhone = {};
+  (data || []).forEach((s) => {
+    const ph = String(s.customer_phone || '').trim();
+    if (!ph) return;
+    if (!byPhone[ph]) byPhone[ph] = { phone: ph, count: 0, prior: 0, total: 0, first: s.sale_date, last: s.sale_date };
+    const c = byPhone[ph];
+    c.count += 1;
+    c.total += Number(s.total) || 0;
+    if (new Date(s.sale_date) < new Date(c.first)) c.first = s.sale_date;
+    if (new Date(s.sale_date) > new Date(c.last)) c.last = s.sale_date;
+  });
+
+  // أرقام مستوردة/قديمة (customer_contacts) - بتنضم لنفس الجدول بدون أي فاتورة وهمية.
+  // لو الجدول لسا ما انعمل بـSupabase، منتجاهل الخطأ ومنكمل بالمبيعات بس.
+  const { data: contacts, error: cErr } = await supabase
+    .from('customer_contacts').select('*').eq('branch_id', activeBranchId).limit(5000);
+  if (!cErr) {
+    (contacts || []).forEach((ct) => {
+      const ph = String(ct.phone || '').trim();
+      if (!ph) return;
+      if (!byPhone[ph]) byPhone[ph] = { phone: ph, count: 0, prior: 0, total: 0, first: null, last: null };
+      byPhone[ph].prior += Number(ct.prior_purchases) || 0;
+      if (ct.name && !nameByPhone[ph]) nameByPhone[ph] = ct.name;
+      byPhone[ph].legacy = true;
+    });
+  }
+
+  customersCache = Object.values(byPhone)
+    .map(c => ({ ...c, name: nameByPhone[c.phone] || '', totalCount: c.count + c.prior }))
+    .sort((a, b) => b.totalCount - a.totalCount ||
+      (a.first ? new Date(a.first) : Infinity) - (b.first ? new Date(b.first) : Infinity));
+  renderCustomers();
+}
+
+function renderCustomers() {
+  const listEl = $('#customers-list');
+  if (!listEl) return;
+  const q = ($('#customers-search')?.value || '').trim().toLowerCase();
+  const rows = customersCache.filter(c =>
+    !q || c.phone.includes(q) || (c.name || '').toLowerCase().includes(q));
+
+  $('#customers-count').textContent = customersCache.length;
+  $('#customers-repeat-count').textContent = customersCache.filter(c => c.totalCount >= 2).length;
+  $('#customers-grand-total').textContent = customersCache.reduce((s, c) => s + c.total, 0).toFixed(0);
+
+  const d = (v) => v ? new Date(v).toLocaleDateString('ar') : '-';
+  listEl.innerHTML = rows.map(c => `
+    <tr>
+      <td dir="ltr" style="font-weight:bold;">${escapeHtml(c.phone)}</td>
+      <td>${escapeHtml(c.name || '-')}${c.legacy && !c.count ? ' <small style="color:var(--muted);">(مستورد)</small>' : ''}</td>
+      <td><b style="color:${c.totalCount >= 3 ? 'var(--green)' : 'inherit'};">${c.totalCount}</b>${c.prior ? ` <small style="color:var(--muted);">(${c.prior} سابقة)</small>` : ''}</td>
+      <td>${d(c.first)}</td>
+      <td>${d(c.last)}</td>
+      <td>${c.total ? c.total.toFixed(0) : '-'}</td>
+    </tr>
+  `).join('') || `<tr><td colspan="6">${q ? 'ما في زبون مطابق للبحث' : 'لسا ما انسجل ولا رقم زبون - اكتب رقم الزبون وقت البيع وبيبلش يتعبى هون تلقائيًا'}</td></tr>`;
+}
+
+$('#customers-search').addEventListener('input', renderCustomers);
+$('#customers-refresh-btn').addEventListener('click', loadCustomers);
+
+// يقرا الأرقام الملصوقة، يطبّعها لصيغة واتساب الدولية، ويعد تكرار كل رقم
+function parseContactsInput() {
+  const raw = ($('#contacts-import-text').value || '').split(/[\s,;،]+/).filter(Boolean);
+  const counts = {}, invalid = [];
+  raw.forEach((r) => {
+    const norm = normalizePhoneForWa(r);
+    if (!norm) { invalid.push(r); return; }
+    counts[norm] = (counts[norm] || 0) + 1;
+  });
+  return { counts, invalid, totalLines: raw.length };
+}
+
+$('#contacts-preview-btn').addEventListener('click', () => {
+  const { counts, invalid, totalLines } = parseContactsInput();
+  const uniq = Object.keys(counts);
+  const dupes = uniq.filter(k => counts[k] > 1);
+  const known = new Set(customersCache.map(c => c.phone));
+  const isNew = uniq.filter(k => !known.has(k));
+  $('#contacts-import-status').textContent =
+    `إجمالي الأسطر: ${totalLines}\nأرقام صالحة فريدة: ${uniq.length}\nجديدة (مو موجودة عندك): ${isNew.length}\nمكررة بالقائمة: ${dupes.length}` +
+    (invalid.length ? `\n⚠ أرقام غير صالحة انتجاهلت (${invalid.length}): ${invalid.slice(0, 10).join('، ')}` : '');
+});
+
+$('#contacts-import-btn').addEventListener('click', async () => {
+  const statusEl = $('#contacts-import-status');
+  const { counts, invalid } = parseContactsInput();
+  const uniq = Object.keys(counts);
+  if (!uniq.length) { statusEl.textContent = '⚠ ما في أرقام صالحة بالنص الملصوق'; return; }
+  const countDupes = $('#contacts-count-dupes').checked;
+  if (!confirm(`بدك تستورد ${uniq.length} رقم لجهات اتصال هاد الفرع؟`)) return;
+
+  statusEl.textContent = '⏳ عم يستورد...';
+  $('#contacts-import-btn').disabled = true;
+  try {
+    const rows = uniq.map(ph => ({
+      branch_id: activeBranchId,
+      phone: ph,
+      prior_purchases: countDupes ? counts[ph] : 0,
+      source: 'استيراد يدوي',
+    }));
+    const { error } = await supabase
+      .from('customer_contacts')
+      .upsert(rows, { onConflict: 'branch_id,phone' });
+    if (error) throw error;
+    statusEl.textContent = `✅ تم استيراد ${uniq.length} رقم بنجاح` +
+      (invalid.length ? `\n⚠ ${invalid.length} رقم غير صالح انتجاهل` : '');
+    $('#contacts-import-text').value = '';
+    await loadCustomers();
+  } catch (err) {
+    statusEl.textContent = '❌ خطأ: ' + err.message +
+      '\n(تأكد إنك نفّذت أمر SQL تبع جدول customer_contacts بـSupabase أول)';
+  } finally {
+    $('#contacts-import-btn').disabled = false;
+  }
+});
+
+$('#customers-copy-btn').addEventListener('click', async () => {
+  const statusEl = $('#customers-copy-status');
+  if (!customersCache.length) { statusEl.textContent = 'ما في أرقام للنسخ'; return; }
+  const text = customersCache.map(c => c.phone).join('\n');
+  try {
+    await navigator.clipboard.writeText(text);
+    statusEl.textContent = `✅ تم نسخ ${customersCache.length} رقم`;
+  } catch (e) {
+    statusEl.textContent = '❌ ما قدر ينسخ تلقائيًا - جرب من متصفح تاني';
+  }
+  setTimeout(() => { statusEl.textContent = ''; }, 4000);
 });
 
 // ---------------- المصاريف (صاحب المحل) ----------------
