@@ -1210,6 +1210,11 @@ function effectivePrice(product, field) {
 function productSell(p) { return effectivePrice(p, 'sell_price'); }
 function productCost(p) { return effectivePrice(p, 'cost_price'); }
 
+// السعر الفعلي يلي بيدفعه الزبون: سعر التصفية ("السعر المحروق") لو مفعّل على المنتج،
+// وإلا سعر البيع العادي. بتشتغل عادي حتى لو أعمدة التصفية مو موجودة بقاعدة البيانات.
+function isBurnedActive(p) { return !!(p && p.burned_price_active && Number(p.burned_price) > 0); }
+function effectiveSalePrice(p) { return isBurnedActive(p) ? Number(p.burned_price) : productSell(p); }
+
 // آخر سعر شراء لكل منتج - مبني من سجل فواتير التوريد (purchaseInvoicesCache)، راجع loadPurchaseInvoices()
 let lastPurchasePriceMap = {};
 function lastPurchaseDisplay(p) {
