@@ -2481,12 +2481,30 @@ async function loadPointsConfig() {
   if (act) act.checked = !!pointsConfig.active;
 }
 
+let pointsLoadError = '';
+
 async function loadPointsRewards() {
-  const { data, error } = await supabase
+  pointsLoadError = '';
+  // محاولة أولى: المحطات مع أصنافها المربوطة بطلب واحد
+  let { data, error } = await supabase
     .from('points_rewards')
     .select('*, points_reward_items(id, product_id)')
     .order('points_required', { ascending: true });
-  if (error) { console.error('تعذر تحميل محطات الجوائز:', error.message); return; }
+
+  // لو فشلت (غالبًا جدول points_reward_items لسا ما انعمل)، منجيب المحطات لحالها
+  // حتى الشاشة تشتغل وتبيّن سبب المشكلة، بدل ما تطلع فاضية بدون تفسير.
+  if (error) {
+    pointsLoadError = error.message || 'خطأ غير معروف';
+    const fallback = await supabase.from('points_rewards').select('*')
+      .order('points_required', { ascending: true });
+    if (fallback.error) {
+      pointsRewards = [];
+      pointsLoadError = fallback.error.message || pointsLoadError;
+      renderPointsRewards();
+      return;
+    }
+    data = (fallback.data || []).map(r => ({ ...r, points_reward_items: [] }));
+  }
   pointsRewards = data || [];
   renderPointsRewards();
 }
@@ -2518,12 +2536,26 @@ function rewardMatchingProducts(reward) {
 function renderPointsRewards() {
   const box = $('#points-rewards-list');
   if (!box) return;
+  const errNote = pointsLoadError
+    ? `<div class="note" style="background:#fdecec; border-color:#e6a3a3; color:#7a2020;">
+         ⚠ <b>في مشكلة بقراءة بيانات النقاط:</b><br>
+         <code style="font-size:11px;">${escapeHtml(pointsLoadError)}</code><br>
+         الأغلب إنه أمر SQL الأخير (جدول <b>points_reward_items</b> + عمود <b>performed_by</b>) لسا ما انفّذ بـSupabase.
+         نفّذه وبعدين اضغط "إعادة المحاولة" تحت.
+         <br><button type="button" class="btn tiny secondary" id="points-retry-btn" style="margin-top:6px;">🔄 إعادة المحاولة</button>
+       </div>`
+    : '';
   if (!pointsRewards.length) {
-    box.innerHTML = '<p class="empty">ما في محطات - تأكد إنك نفّذت أوامر SQL تبع النقاط.</p>';
+    box.innerHTML = errNote || `<div class="note">
+      ما في محطات مسجّلة. تأكد إنك نفّذت أوامر SQL تبع النقاط كاملة (إنشاء الجداول + السياسات + إدخال المحطات الأربع).
+      <br><button type="button" class="btn tiny secondary" id="points-retry-btn" style="margin-top:6px;">🔄 إعادة المحاولة</button>
+    </div>`;
+    const rb = $('#points-retry-btn');
+    if (rb) rb.addEventListener('click', loadPointsRewards);
     return;
   }
 
-  box.innerHTML = pointsRewards.map(r => {
+  box.innerHTML = errNote + pointsRewards.map(r => {
     const items = (r.points_reward_items || []);
     const chips = items.map(it => {
       const prod = productsCache.find(p => p.id === it.product_id);
@@ -2573,6 +2605,8 @@ function renderPointsRewards() {
       <div style="font-size:11.5px; color:var(--muted); margin-top:4px;">${matchNote}</div>
     </div>`;
   }).join('');
+  const rb2 = $('#points-retry-btn');
+  if (rb2) rb2.addEventListener('click', loadPointsRewards);
 }
 
 $('#points-config-save-btn')?.addEventListener('click', async () => {
