@@ -1455,7 +1455,7 @@ function renderSaleInvoiceUnmatched() {
   }
   wrap.style.display = 'block';
   const options = productsCache.slice()
-    .sort((a, b) => a.name.localeCompare(b.name, 'ar'))
+    .sort(byNameAr)
     .map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
   list.innerHTML = saleInvoiceUnmatched.map((it) => `
     <div class="unmatched-row" data-id="${it.tempId}" style="border:1px solid var(--border); border-radius:8px; padding:8px; margin-bottom:6px;">
@@ -2527,9 +2527,14 @@ function rewardProducts(reward) {
 const REWARD_PRICE_TOLERANCE = 0.20;
 let rewardShowAll = {}; // reward_id -> true لو بده يشوف كل الأصناف
 
+// ترتيب آمن: لو منتج اسمه فاضي/ناقص، String() بتحميه من رمي خطأ يوقف كل العرض
+function byNameAr(a, b) {
+  return String((a && a.name) || '').localeCompare(String((b && b.name) || ''), 'ar');
+}
+
 function rewardMatchingProducts(reward) {
   const target = Number(reward.gift_value) || 0;
-  const list = productsCache.slice().sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+  const list = productsCache.slice().sort(byNameAr);
   if (rewardShowAll[reward.id] || target <= 0) return list;
   const min = target * (1 - REWARD_PRICE_TOLERANCE);
   const max = target * (1 + REWARD_PRICE_TOLERANCE);
@@ -2561,6 +2566,7 @@ function renderPointsRewards() {
     return;
   }
 
+  try {
   box.innerHTML = errNote + pointsRewards.map(r => {
     const items = (r.points_reward_items || []);
     const chips = items.map(it => {
@@ -2611,6 +2617,13 @@ function renderPointsRewards() {
       <div style="font-size:11.5px; color:var(--muted); margin-top:4px;">${matchNote}</div>
     </div>`;
   }).join('');
+  } catch (err) {
+    console.error('renderPointsRewards:', err);
+    box.innerHTML = `<div class="note" style="background:#fdecec; border-color:#e6a3a3; color:#7a2020;">
+      ⚠ <b>صار خطأ وقت عرض المحطات:</b><br><code style="font-size:11px;">${escapeHtml(err.message || String(err))}</code>
+      <br><button type="button" class="btn tiny secondary" id="points-retry-btn" style="margin-top:6px;">🔄 إعادة المحاولة</button>
+    </div>`;
+  }
   const rb2 = $('#points-retry-btn');
   if (rb2) rb2.addEventListener('click', loadPointsRewards);
 }
