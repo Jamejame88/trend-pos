@@ -299,6 +299,7 @@
     <button class="tab-btn owner-only" data-tab="history">سجل المبيعات</button>
     <button class="tab-btn owner-only" data-tab="debts">الديون</button>
     <button class="tab-btn owner-only" data-tab="customers">الزباين</button>
+    <button class="tab-btn owner-only" data-tab="points">النقاط</button>
     <button class="tab-btn owner-only" data-tab="expenses">المصاريف</button>
     <button class="tab-btn owner-only" data-tab="returns">المرتجعات</button>
     <button class="tab-btn owner-only" data-tab="purchases">فواتير التوريد</button>
@@ -358,6 +359,13 @@
                 <option value="app">تطبيق واتساب (بدون تبويب متصفح)</option>
                 <option value="web">متصفح - واتساب ويب</option>
               </select>
+            </div>
+            <div id="customer-points-info" style="display:none; margin-top:6px; padding:8px 10px; border:1px solid #cfe3ff; border-radius:8px; background:#f5faff; font-size:13px;">
+              <div id="cpi-line"></div>
+              <div id="cpi-bar-wrap" style="margin-top:6px; height:7px; background:#e3ecf7; border-radius:5px; overflow:hidden;">
+                <div id="cpi-bar" style="height:100%; width:0%; background:var(--green); transition:width .3s;"></div>
+              </div>
+              <button type="button" class="btn tiny" id="cpi-redeem-btn" style="margin-top:8px; display:none;">🎁 استبدال نقاط</button>
             </div>
           </div>
           <button class="btn block" id="checkout-btn" style="margin-top:10px;">✔ إتمام عملية البيع</button>
@@ -582,7 +590,7 @@
         <span id="customers-copy-status" style="font-size:12px; color:var(--muted); margin-right:8px;"></span>
         <div style="max-height:60vh; overflow-y:auto; overflow-x:auto; margin-top:10px;">
           <table>
-            <thead><tr><th>الرقم</th><th>الاسم</th><th>عدد مرات الشراء</th><th>أول عملية</th><th>آخر عملية</th><th>إجمالي المشتريات</th></tr></thead>
+            <thead><tr><th>الرقم</th><th>الاسم</th><th>عدد مرات الشراء</th><th>النقاط</th><th>أول عملية</th><th>آخر عملية</th><th>إجمالي المشتريات</th></tr></thead>
             <tbody id="customers-list"></tbody>
           </table>
         </div>
@@ -603,6 +611,60 @@
         <button type="button" class="btn secondary" id="contacts-preview-btn">🔍 معاينة</button>
         <button type="button" class="btn" id="contacts-import-btn">💾 استيراد الأرقام</button>
         <div id="contacts-import-status" style="margin-top:10px; font-size:13px; white-space:pre-line;"></div>
+      </div>
+    </section>
+
+    <!-- ---------- برنامج النقاط (صاحب المحل) ---------- -->
+    <section id="tab-points" class="tab-panel">
+      <div class="card">
+        <h2>⚙ إعدادات النقاط</h2>
+        <p style="font-size:13px; color:var(--muted); margin-top:0;">
+          الزبون بياخد نقطة عن كل مبلغ بتحدده هون من قيمة فاتورته (بعد الخصم).
+          فيك تغيّر الرقم بأي وقت - التغيير بيأثر على الفواتير الجاية بس، والنقاط المكسوبة قبل ما تتأثر.
+        </p>
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+          <label>كل كم ليرة = نقطة وحدة؟</label>
+          <input type="number" id="points-amount-input" min="1" step="any" style="width:120px; padding:8px; border-radius:8px; border:1px solid var(--border);">
+          <label style="display:flex; align-items:center; gap:6px;">
+            <input type="checkbox" id="points-active-input" style="width:auto;"> البرنامج شغّال
+          </label>
+          <button type="button" class="btn" id="points-config-save-btn">💾 حفظ</button>
+          <span id="points-config-status" style="font-size:12px; color:var(--muted);"></span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>🎁 محطات الجوائز</h2>
+        <p style="font-size:13px; color:var(--muted); margin-top:0;">
+          كل محطة إلها عدد نقاط مطلوب وقيمة معلنة للهدية، واربطها بأصناف من منتجاتك -
+          الزبون بيختار صنف واحد منها وقت الاستبدال، والكمية بتنخصم من المخزون تلقائيًا.
+          <b>اربط أصناف من الفرع الحالي</b> (الأصناف من فرع تاني ما بتظهر للكاشير هون).
+        </p>
+        <div id="points-rewards-list"></div>
+      </div>
+
+      <div class="card">
+        <h2>🔎 نقاط انضافت بدون فاتورة</h2>
+        <p style="font-size:13px; color:var(--muted); margin-top:0;">
+          أي نقاط كسب انضافت من غير ما تكون مربوطة بفاتورة بيع - المفروض تكون فاضية دايمًا.
+          لو ظهر فيها شي، راجع مين نفّذها.
+        </p>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead><tr><th>التاريخ</th><th>الرقم</th><th>النقاط</th><th>السبب</th><th>نفّذها</th></tr></thead>
+            <tbody id="points-orphan-list"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>📜 آخر حركات النقاط</h2>
+        <div style="max-height:50vh; overflow-y:auto; overflow-x:auto;">
+          <table>
+            <thead><tr><th>التاريخ</th><th>الرقم</th><th>الحركة</th><th>السبب</th><th>نفّذها</th></tr></thead>
+            <tbody id="points-ledger-list"></tbody>
+          </table>
+        </div>
       </div>
     </section>
 
@@ -861,6 +923,15 @@
 <!-- ==================== منطقة طباعة الفاتورة (مخفية، تظهر بس وقت الطباعة) ==================== -->
 <div id="receipt-print-area"></div>
 
+<!-- ==================== نافذة استبدال النقاط ==================== -->
+<div id="redeem-modal" class="scanner-modal">
+  <div class="scanner-box" style="max-width:540px; max-height:85vh; overflow-y:auto;">
+    <h3 style="margin-top:0;">🎁 استبدال النقاط</h3>
+    <div id="redeem-body"></div>
+    <button type="button" class="btn secondary block" id="redeem-close-btn" style="margin-top:10px;">إغلاق</button>
+  </div>
+</div>
+
 <!-- ==================== نافذة ماسح الباركود ==================== -->
 <div id="scanner-modal" class="scanner-modal">
   <div class="scanner-box">
@@ -1070,6 +1141,8 @@ $$('.tab-btn').forEach(btn => {
 // ---------------- تحميل البيانات ----------------
 async function refreshAll() {
   await loadProducts();
+  await loadPointsConfig();
+  await loadPointsRewards();
   renderPendingSales();
   await loadTodaySoldItems();
   if (currentProfile.role === 'owner') {
@@ -1083,6 +1156,7 @@ async function refreshAll() {
     await loadPurchaseInvoices();
     await loadActivityLog();
     await loadEmployees();
+    await loadPointsLedger();
     if (reportUnlocked) { await loadReportData(); await loadDailyReport(); }
   }
 }
@@ -1583,7 +1657,7 @@ function normalizePhoneForWa(raw) {
 }
 
 // نص الفاتورة متل ما بيوصل الزبون - بدون أي إعلان أو ترويج
-function buildWhatsAppInvoiceText({ date, items, subtotal, discount, total, saleIdShort }) {
+function buildWhatsAppInvoiceText({ date, items, subtotal, discount, total, saleIdShort, earnedPoints = 0, balancePoints = 0 }) {
   const lines = [];
   lines.push(`*${SHOP_NAME}* - ${SHOP_SUBTITLE}`);
   lines.push('');
@@ -1599,6 +1673,11 @@ function buildWhatsAppInvoiceText({ date, items, subtotal, discount, total, sale
     lines.push(`الخصم: ${Number(discount).toFixed(0)}`);
   }
   lines.push(`*الإجمالي: ${Number(total).toFixed(0)} ل.س*`);
+  if (earnedPoints > 0) {
+    lines.push('');
+    lines.push(`⭐ نقاط هاي الفاتورة: ${earnedPoints}`);
+    lines.push(`رصيدك الكلي: ${balancePoints} نقطة`);
+  }
   lines.push('');
   lines.push('شكرًا لزيارتكم 🌸');
   return lines.join('\n');
@@ -1809,11 +1888,15 @@ $('#checkout-btn').addEventListener('click', async () => {
   if (waPhone) {
     const { error: phoneErr } = await supabase.from('sales').update({ customer_phone: waPhone }).eq('id', saleId);
     if (phoneErr) console.error('تعذر حفظ رقم الزبون بالفاتورة:', phoneErr.message);
+    // نقاط هاي الفاتورة + الرصيد الجديد - بينضافوا لنص الفاتورة
+    const earned = await awardPointsForSale(waPhone, saleId, total);
+    const newBalance = pointsConfig.active ? await fetchBalance(waPhone) : 0;
     const waText = buildWhatsAppInvoiceText({
       date: new Date().toLocaleString('ar'),
       items: cart.map(i => ({ name: i.name, qty: i.qty, subtotal: i.subtotal })),
       subtotal, discount, total,
       saleIdShort: saleId ? String(saleId).slice(0, 8) : '',
+      earnedPoints: earned, balancePoints: newBalance,
     });
     showWhatsAppSend(waPhone, waText); // كرت احتياطي - بيفيد بس لو المتصفح حجب الفتح التلقائي
     if (waUsesApp()) {
@@ -1837,6 +1920,8 @@ $('#checkout-btn').addEventListener('click', async () => {
   $('#paid-input').value = 0;
   $('#sale-custom-date-input').value = '';
   $('#customer-phone-input').value = '';
+  if ($('#customer-points-info')) $('#customer-points-info').style.display = 'none';
+  cpiPhone = null;
   renderCart();
   await loadProducts();
   await loadTodaySoldItems();
@@ -2379,6 +2464,302 @@ $('#debts-list').addEventListener('click', async (e) => {
   await loadActivityLog();
 });
 
+// ================= برنامج النقاط =================
+// المبدأ: سجل حركات (points_ledger) - كل سطر موجب = كسب، سالب = استبدال.
+// الرصيد = مجموع الحركات، مو رقم محفوظ - هيك أي إلغاء/تصحيح بينعكس بحركة عكسية
+// والسجل بيضل كامل وقابل للمراجعة. الرصيد مشترك بين الفرعين (بدون فلترة branch_id).
+let pointsConfig = { amount_per_point: 200, active: true };
+let pointsRewards = [];
+let pointsBalances = {}; // phone -> رصيد (بينتعبى مع جدول الزباين)
+
+async function loadPointsConfig() {
+  const { data, error } = await supabase.from('points_config').select('*').eq('id', 1).maybeSingle();
+  if (!error && data) pointsConfig = data;
+  const inp = $('#points-amount-input');
+  if (inp && document.activeElement !== inp) inp.value = Number(pointsConfig.amount_per_point) || '';
+  const act = $('#points-active-input');
+  if (act) act.checked = !!pointsConfig.active;
+}
+
+async function loadPointsRewards() {
+  const { data, error } = await supabase
+    .from('points_rewards')
+    .select('*, points_reward_items(id, product_id)')
+    .order('points_required', { ascending: true });
+  if (error) { console.error('تعذر تحميل محطات الجوائز:', error.message); return; }
+  pointsRewards = data || [];
+  renderPointsRewards();
+}
+
+function rewardProducts(reward) {
+  // بس أصناف الفرع الحالي - الكاشير ما بيقدر يخصم من مخزون فرع تاني
+  return (reward.points_reward_items || [])
+    .map(it => productsCache.find(p => p.id === it.product_id))
+    .filter(Boolean);
+}
+
+function renderPointsRewards() {
+  const box = $('#points-rewards-list');
+  if (!box) return;
+  if (!pointsRewards.length) {
+    box.innerHTML = '<p class="empty">ما في محطات - تأكد إنك نفّذت أوامر SQL تبع النقاط.</p>';
+    return;
+  }
+  const options = productsCache.slice()
+    .sort((a, b) => a.name.localeCompare(b.name, 'ar'))
+    .map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+
+  box.innerHTML = pointsRewards.map(r => {
+    const items = (r.points_reward_items || []);
+    const chips = items.map(it => {
+      const prod = productsCache.find(p => p.id === it.product_id);
+      const label = prod ? prod.name : 'صنف من فرع تاني';
+      return `<span style="display:inline-flex; align-items:center; gap:5px; background:#eef2f6; border-radius:14px; padding:4px 10px; margin:3px 3px 0 0; font-size:12px;">
+        ${escapeHtml(label)}
+        <button class="btn tiny danger reward-item-del" data-item-id="${it.id}" style="padding:1px 6px;">✕</button>
+      </span>`;
+    }).join('') || '<span style="color:var(--muted); font-size:12px;">ما في أصناف مربوطة لهاي المحطة بعد</span>';
+
+    return `
+    <div style="border:1px solid var(--border); border-radius:10px; padding:12px; margin-bottom:10px;">
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+        <b>محطة</b>
+        <input type="number" class="reward-points" data-id="${r.id}" value="${r.points_required}" min="1" style="width:80px; padding:6px; border-radius:6px; border:1px solid var(--border);">
+        <span>نقطة =</span>
+        <span>هدية بقيمة</span>
+        <input type="number" class="reward-value" data-id="${r.id}" value="${Number(r.gift_value)}" min="0" step="any" style="width:100px; padding:6px; border-radius:6px; border:1px solid var(--border);">
+        <span>ل.س</span>
+        <label style="display:flex; align-items:center; gap:5px; font-size:12px;">
+          <input type="checkbox" class="reward-active" data-id="${r.id}" ${r.active ? 'checked' : ''} style="width:auto;"> مفعّلة
+        </label>
+        <button class="btn tiny reward-save" data-id="${r.id}">💾 حفظ</button>
+      </div>
+      <div style="margin-bottom:6px;">${chips}</div>
+      <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+        <select class="reward-add-select" data-id="${r.id}" style="max-width:220px; padding:6px; border-radius:6px; border:1px solid var(--border);">
+          <option value="">-- اختر صنف لإضافته --</option>${options}
+        </select>
+        <button class="btn tiny secondary reward-add-btn" data-id="${r.id}">➕ اربط الصنف</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+$('#points-config-save-btn')?.addEventListener('click', async () => {
+  const val = parseFloat($('#points-amount-input').value);
+  const statusEl = $('#points-config-status');
+  if (!(val > 0)) { statusEl.textContent = '⚠ حط رقم أكبر من صفر'; return; }
+  const { error } = await supabase.from('points_config')
+    .update({ amount_per_point: val, active: $('#points-active-input').checked }).eq('id', 1);
+  if (error) { statusEl.textContent = '❌ ' + error.message; return; }
+  pointsConfig.amount_per_point = val;
+  pointsConfig.active = $('#points-active-input').checked;
+  statusEl.textContent = '✅ تم الحفظ';
+  setTimeout(() => { statusEl.textContent = ''; }, 3000);
+});
+
+$('#points-rewards-list')?.addEventListener('click', async (e) => {
+  const saveBtn = e.target.closest('.reward-save');
+  if (saveBtn) {
+    const id = saveBtn.dataset.id;
+    const wrap = saveBtn.closest('div').parentNode;
+    const pts = parseInt(wrap.querySelector(`.reward-points[data-id="${id}"]`).value, 10) || 0;
+    const val = parseFloat(wrap.querySelector(`.reward-value[data-id="${id}"]`).value) || 0;
+    const act = wrap.querySelector(`.reward-active[data-id="${id}"]`).checked;
+    if (pts <= 0) { alert('عدد النقاط لازم يكون أكبر من صفر'); return; }
+    const { error } = await supabase.from('points_rewards')
+      .update({ points_required: pts, gift_value: val, active: act }).eq('id', id);
+    if (error) { alert('خطأ بالحفظ: ' + error.message); return; }
+    await loadPointsRewards();
+    return;
+  }
+  const addBtn = e.target.closest('.reward-add-btn');
+  if (addBtn) {
+    const id = addBtn.dataset.id;
+    const sel = document.querySelector(`.reward-add-select[data-id="${id}"]`);
+    if (!sel || !sel.value) { alert('اختار صنف أول'); return; }
+    const { error } = await supabase.from('points_reward_items')
+      .insert({ reward_id: id, product_id: sel.value });
+    if (error) { alert(error.message.includes('duplicate') ? 'هاد الصنف مربوط أصلًا بهاي المحطة' : 'خطأ: ' + error.message); return; }
+    await loadPointsRewards();
+    return;
+  }
+  const delBtn = e.target.closest('.reward-item-del');
+  if (delBtn) {
+    const { error } = await supabase.from('points_reward_items').delete().eq('id', delBtn.dataset.itemId);
+    if (error) { alert('خطأ: ' + error.message); return; }
+    await loadPointsRewards();
+  }
+});
+
+// ---- الرصيد ----
+async function fetchBalance(phone) {
+  const { data, error } = await supabase.from('points_ledger').select('delta').eq('phone', phone);
+  if (error) return 0;
+  return (data || []).reduce((s, r) => s + (Number(r.delta) || 0), 0);
+}
+
+async function loadPointsBalances() {
+  const { data, error } = await supabase.from('points_ledger').select('phone, delta').limit(20000);
+  pointsBalances = {};
+  if (error) return;
+  (data || []).forEach((r) => {
+    pointsBalances[r.phone] = (pointsBalances[r.phone] || 0) + (Number(r.delta) || 0);
+  });
+}
+
+// نقاط الفاتورة - بتتحسب على المبلغ الفعلي بعد الخصم
+async function awardPointsForSale(phone, saleId, amount) {
+  if (!pointsConfig.active) return 0;
+  const per = Number(pointsConfig.amount_per_point) || 0;
+  if (per <= 0) return 0;
+  const pts = Math.floor((Number(amount) || 0) / per);
+  if (pts <= 0) return 0;
+  const { error } = await supabase.from('points_ledger').insert({
+    phone, branch_id: activeBranchId, sale_id: saleId, delta: pts,
+    reason: 'نقاط شراء', performed_by: currentProfile ? currentProfile.id : null,
+  });
+  if (error) { console.error('تعذر تسجيل النقاط:', error.message); return 0; }
+  return pts;
+}
+
+// ---- مؤشر الكاشير تحت خانة الرقم ----
+let cpiTimer = null, cpiPhone = null, cpiBalance = 0;
+
+async function refreshCustomerPointsInfo() {
+  const box = $('#customer-points-info');
+  if (!box) return;
+  const phone = normalizePhoneForWa($('#customer-phone-input').value);
+  if (!phone) { box.style.display = 'none'; cpiPhone = null; return; }
+
+  const [balance, salesRes, contactRes] = await Promise.all([
+    fetchBalance(phone),
+    supabase.from('sales').select('id', { count: 'exact', head: true })
+      .eq('customer_phone', phone).eq('status', 'completed'),
+    supabase.from('customer_contacts').select('name').eq('phone', phone).limit(1),
+  ]);
+
+  cpiPhone = phone;
+  cpiBalance = balance;
+  const visits = salesRes.count || 0;
+  const name = (contactRes.data && contactRes.data[0] && contactRes.data[0].name) || '';
+  const tiers = pointsRewards.filter(r => r.active).sort((a, b) => a.points_required - b.points_required);
+  const next = tiers.find(t => t.points_required > balance);
+  const reached = tiers.filter(t => t.points_required <= balance);
+
+  let line = `<b>${name ? escapeHtml(name) + ' — ' : ''}${visits} ${visits === 1 ? 'عملية' : 'عمليات'}</b>`
+    + ` · الرصيد: <b style="color:var(--green);">${balance}</b> نقطة`;
+  let pct = 100;
+  if (next) {
+    const prev = reached.length ? reached[reached.length - 1].points_required : 0;
+    pct = Math.max(0, Math.min(100, ((balance - prev) / (next.points_required - prev)) * 100));
+    line += `<br><span style="color:var(--muted);">المحطة الجاية: ${next.points_required} نقطة (باقي ${next.points_required - balance})</span>`;
+  } else if (tiers.length) {
+    line += '<br><span style="color:var(--green);">🎉 وصل أعلى محطة!</span>';
+  }
+  $('#cpi-line').innerHTML = line;
+  $('#cpi-bar').style.width = pct + '%';
+  $('#cpi-redeem-btn').style.display = reached.length ? 'inline-block' : 'none';
+  box.style.display = 'block';
+}
+
+$('#customer-phone-input')?.addEventListener('input', () => {
+  clearTimeout(cpiTimer);
+  cpiTimer = setTimeout(refreshCustomerPointsInfo, 450);
+});
+
+// ---- نافذة الاستبدال ----
+$('#cpi-redeem-btn')?.addEventListener('click', () => openRedeemModal());
+$('#redeem-close-btn')?.addEventListener('click', () => { $('#redeem-modal').style.display = 'none'; });
+
+function openRedeemModal() {
+  if (!cpiPhone) return;
+  const tiers = pointsRewards
+    .filter(r => r.active && r.points_required <= cpiBalance)
+    .sort((a, b) => b.points_required - a.points_required);
+  const body = $('#redeem-body');
+  body.innerHTML = `<p style="font-size:13px;">رصيد <b dir="ltr">${escapeHtml(cpiPhone)}</b>: <b style="color:var(--green);">${cpiBalance}</b> نقطة</p>` +
+    (tiers.length ? tiers.map(t => {
+      const prods = rewardProducts(t);
+      return `
+      <div style="border:1px solid var(--border); border-radius:10px; padding:10px; margin-bottom:10px;">
+        <div style="font-weight:bold; margin-bottom:6px;">${t.points_required} نقطة — هدية بقيمة ${Number(t.gift_value).toFixed(0)} ل.س</div>
+        ${prods.length ? prods.map(p => `
+          <button class="btn tiny secondary redeem-pick" style="margin:3px 3px 0 0;"
+            data-reward="${t.id}" data-points="${t.points_required}" data-product="${p.id}"
+            data-name="${escapeAttr(p.name)}">${escapeHtml(p.name)} <small>(متوفر: ${p.quantity})</small></button>
+        `).join('') : '<span style="color:var(--muted); font-size:12px;">ما في أصناف مربوطة بهاي المحطة بالفرع الحالي</span>'}
+      </div>`;
+    }).join('') : '<p class="empty">الرصيد ما وصل أول محطة بعد</p>');
+  $('#redeem-modal').style.display = 'flex';
+}
+
+$('#redeem-body')?.addEventListener('click', async (e) => {
+  const btn = e.target.closest('.redeem-pick');
+  if (!btn) return;
+  const pts = parseInt(btn.dataset.points, 10) || 0;
+  const productId = btn.dataset.product;
+  const productName = btn.dataset.name;
+  const product = productsCache.find(p => p.id === productId);
+  if (!product) { alert('الصنف مو موجود بالفرع الحالي'); return; }
+  if (Number(product.quantity) < 1) { alert(`"${productName}" خلص من المخزون - اختار صنف تاني`); return; }
+  if (!confirm(`استبدال ${pts} نقطة بهدية "${productName}"؟\nرح تنخصم النقاط وتنقص كمية الصنف من المخزون.`)) return;
+
+  btn.disabled = true;
+  try {
+    const { error: ledErr } = await supabase.from('points_ledger').insert({
+      phone: cpiPhone, branch_id: activeBranchId, sale_id: null, delta: -pts,
+      reason: `استبدال بهدية: ${productName}`,
+      performed_by: currentProfile ? currentProfile.id : null,
+    });
+    if (ledErr) throw ledErr;
+
+    const { error: prodErr } = await supabase.from('products')
+      .update({ quantity: Math.max(0, Number(product.quantity) - 1) }).eq('id', productId);
+    if (prodErr) throw prodErr;
+
+    await supabase.from('activity_log').insert({
+      branch_id: activeBranchId, action_type: 'points_redeemed',
+      description: `استبدال ${pts} نقطة - ${cpiPhone} - هدية: ${productName}`,
+      amount: 0, performed_by: currentProfile ? currentProfile.id : null,
+    });
+
+    alert(`✅ تم الاستبدال - سلّم الزبون "${productName}"`);
+    $('#redeem-modal').style.display = 'none';
+    await loadProducts();
+    await refreshCustomerPointsInfo();
+    if (currentProfile.role === 'owner') { await loadPointsLedger(); await loadCustomers(); }
+  } catch (err) {
+    alert('خطأ بالاستبدال: ' + err.message);
+    btn.disabled = false;
+  }
+});
+
+// ---- سجل الحركات + مراقبة النقاط بدون فاتورة ----
+async function loadPointsLedger() {
+  if (!currentProfile || currentProfile.role !== 'owner') return;
+  const { data, error } = await supabase.from('points_ledger').select('*')
+    .order('created_at', { ascending: false }).limit(200);
+  if (error) { console.error(error); return; }
+  const rows = data || [];
+  const nameOf = (id) => {
+    const e = employeesCache.find(x => x.id === id);
+    return e ? (e.full_name || e.username) : '-';
+  };
+  const fmt = (r) => `
+    <tr>
+      <td>${new Date(r.created_at).toLocaleString('ar')}</td>
+      <td dir="ltr">${escapeHtml(r.phone)}</td>
+      <td style="color:${r.delta >= 0 ? 'var(--green)' : 'var(--red)'}; font-weight:bold;">${r.delta > 0 ? '+' : ''}${r.delta}</td>
+      <td>${escapeHtml(r.reason || '-')}</td>
+      <td>${escapeHtml(nameOf(r.performed_by))}</td>
+    </tr>`;
+  $('#points-ledger-list').innerHTML = rows.map(fmt).join('') || '<tr><td colspan="5">ما في حركات بعد</td></tr>';
+  const orphans = rows.filter(r => !r.sale_id && Number(r.delta) > 0);
+  $('#points-orphan-list').innerHTML = orphans.map(fmt).join('') ||
+    '<tr><td colspan="5">✅ ما في نقاط انضافت بدون فاتورة</td></tr>';
+}
+
 // ---------------- قاعدة الزباين (من أرقام الفواتير) ----------------
 // بتتبنى من عمود sales.customer_phone يلي بينتعبى من خانة رقم الموبايل وقت البيع.
 // الأسماء بتجي من جدول الديون (الرقم بينطبّع لنفس صيغة الفواتير قبل المطابقة).
@@ -2429,6 +2810,7 @@ async function loadCustomers() {
     });
   }
 
+  await loadPointsBalances();
   customersCache = Object.values(byPhone)
     .map(c => ({ ...c, name: nameByPhone[c.phone] || '', totalCount: c.count + c.prior }))
     .sort((a, b) => b.totalCount - a.totalCount ||
@@ -2462,11 +2844,12 @@ function renderCustomers() {
         : `${escapeHtml(c.name || '-')}${c.legacy && !c.count ? ' <small style="color:var(--muted);">(مستورد)</small>' : ''}
            <button class="btn tiny secondary cust-name-edit" data-phone="${escapeAttr(c.phone)}" title="اكتب/عدّل اسم هاد الزبون">✏</button>`}</td>
       <td><b style="color:${c.totalCount >= 3 ? 'var(--green)' : 'inherit'};">${c.totalCount}</b>${c.prior ? ` <small style="color:var(--muted);">(${c.prior} سابقة)</small>` : ''}</td>
+      <td><b style="color:var(--green);">${pointsBalances[c.phone] || 0}</b></td>
       <td>${d(c.first)}</td>
       <td>${d(c.last)}</td>
       <td>${c.total ? c.total.toFixed(0) : '-'}</td>
     </tr>
-  `).join('') || `<tr><td colspan="6">${q ? 'ما في زبون مطابق للبحث' : 'لسا ما انسجل ولا رقم زبون - اكتب رقم الزبون وقت البيع وبيبلش يتعبى هون تلقائيًا'}</td></tr>`;
+  `).join('') || `<tr><td colspan="7">${q ? 'ما في زبون مطابق للبحث' : 'لسا ما انسجل ولا رقم زبون - اكتب رقم الزبون وقت البيع وبيبلش يتعبى هون تلقائيًا'}</td></tr>`;
 }
 
 // كتابة/تعديل اسم الزبون مباشرة بالجدول - بينحفظ بجدول customer_contacts
