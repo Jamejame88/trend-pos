@@ -2498,6 +2498,23 @@ function rewardProducts(reward) {
     .filter(Boolean);
 }
 
+// مدى مطابقة سعر البيع لقيمة الهدية (±20%) - أي صنف سعره برّا المدى ما بيظهر
+// بقائمة المحطة، إلا إذا صاحب المحل علّم "أظهر كل الأصناف" لهاي المحطة.
+const REWARD_PRICE_TOLERANCE = 0.20;
+let rewardShowAll = {}; // reward_id -> true لو بده يشوف كل الأصناف
+
+function rewardMatchingProducts(reward) {
+  const target = Number(reward.gift_value) || 0;
+  const list = productsCache.slice().sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+  if (rewardShowAll[reward.id] || target <= 0) return list;
+  const min = target * (1 - REWARD_PRICE_TOLERANCE);
+  const max = target * (1 + REWARD_PRICE_TOLERANCE);
+  return list.filter(p => {
+    const price = effectiveSalePrice(p);
+    return price >= min && price <= max;
+  });
+}
+
 function renderPointsRewards() {
   const box = $('#points-rewards-list');
   if (!box) return;
@@ -2505,9 +2522,6 @@ function renderPointsRewards() {
     box.innerHTML = '<p class="empty">ما في محطات - تأكد إنك نفّذت أوامر SQL تبع النقاط.</p>';
     return;
   }
-  const options = productsCache.slice()
-    .sort((a, b) => a.name.localeCompare(b.name, 'ar'))
-    .map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
 
   box.innerHTML = pointsRewards.map(r => {
     const items = (r.points_reward_items || []);
@@ -2519,6 +2533,17 @@ function renderPointsRewards() {
         <button class="btn tiny danger reward-item-del" data-item-id="${it.id}" style="padding:1px 6px;">✕</button>
       </span>`;
     }).join('') || '<span style="color:var(--muted); font-size:12px;">ما في أصناف مربوطة لهاي المحطة بعد</span>';
+
+    const matches = rewardMatchingProducts(r);
+    const matchOptions = matches.map(p =>
+      `<option value="${p.id}">${escapeHtml(p.name)} — ${effectiveSalePrice(p).toFixed(0)} ل.س</option>`).join('');
+    const target = Number(r.gift_value) || 0;
+    const matchNote = rewardShowAll[r.id]
+      ? '⚠ عم تشوف كل الأصناف - ممكن تربط صنف سعره بعيد عن قيمة الهدية'
+      : (target > 0
+          ? `القائمة بتعرض بس الأصناف يلي سعرها بين ${(target * 0.8).toFixed(0)} و${(target * 1.2).toFixed(0)} ل.س` +
+            (matches.length ? ` (${matches.length} صنف)` : ' — <b>ما في ولا صنف بهاد المدى</b>، علّم "أظهر كل الأصناف" أو غيّر قيمة الهدية')
+          : 'حدد قيمة الهدية فوق حتى تنفلتر الأصناف حسب سعرها');
 
     return `
     <div style="border:1px solid var(--border); border-radius:10px; padding:12px; margin-bottom:10px;">
@@ -2536,11 +2561,16 @@ function renderPointsRewards() {
       </div>
       <div style="margin-bottom:6px;">${chips}</div>
       <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-        <select class="reward-add-select" data-id="${r.id}" style="max-width:220px; padding:6px; border-radius:6px; border:1px solid var(--border);">
-          <option value="">-- اختر صنف لإضافته --</option>${options}
+        <select class="reward-add-select" data-id="${r.id}" style="max-width:240px; padding:6px; border-radius:6px; border:1px solid var(--border);">
+          <option value="">-- اختر صنف لإضافته --</option>${matchOptions}
         </select>
         <button class="btn tiny secondary reward-add-btn" data-id="${r.id}">➕ اربط الصنف</button>
+        <label style="display:flex; align-items:center; gap:5px; font-size:11.5px; color:var(--muted);">
+          <input type="checkbox" class="reward-show-all" data-id="${r.id}" ${rewardShowAll[r.id] ? 'checked' : ''} style="width:auto;">
+          أظهر كل الأصناف
+        </label>
       </div>
+      <div style="font-size:11.5px; color:var(--muted); margin-top:4px;">${matchNote}</div>
     </div>`;
   }).join('');
 }
@@ -2556,6 +2586,13 @@ $('#points-config-save-btn')?.addEventListener('click', async () => {
   pointsConfig.active = $('#points-active-input').checked;
   statusEl.textContent = '✅ تم الحفظ';
   setTimeout(() => { statusEl.textContent = ''; }, 3000);
+});
+
+$('#points-rewards-list')?.addEventListener('change', (e) => {
+  const cb = e.target.closest('.reward-show-all');
+  if (!cb) return;
+  rewardShowAll[cb.dataset.id] = cb.checked;
+  renderPointsRewards();
 });
 
 $('#points-rewards-list')?.addEventListener('click', async (e) => {
