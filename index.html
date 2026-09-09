@@ -168,6 +168,9 @@
     font-size: 13px;
   }
   .cart-price-input.price-overridden { border-color: var(--green); color: var(--green); font-weight: bold; }
+  .cart-price-input.below-cost { border-color: var(--red); color: var(--red); font-weight: bold; background: #fff5f5; }
+  .cart-row.below-cost-row { background: #fff7f7; }
+  .below-cost-note { grid-column: 1 / -1; font-size: 11.5px; color: var(--red); padding: 2px 4px 0; }
   .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 12px; }
 
   .totals-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 14px; }
@@ -300,6 +303,8 @@
     <button class="tab-btn owner-only" data-tab="debts">الديون</button>
     <button class="tab-btn owner-only" data-tab="customers">الزباين</button>
     <button class="tab-btn owner-only" data-tab="points">النقاط</button>
+    <button class="tab-btn owner-only" data-tab="stock">الجرد</button>
+    <button class="tab-btn owner-only" data-tab="suppliers">ديون الموردين</button>
     <button class="tab-btn owner-only" data-tab="expenses">المصاريف</button>
     <button class="tab-btn owner-only" data-tab="returns">المرتجعات</button>
     <button class="tab-btn owner-only" data-tab="purchases">فواتير التوريد</button>
@@ -439,8 +444,24 @@
                 <option value="usd">دولار أمريكي</option>
               </select>
             </div>
-            <div class="field"><label>سعر الشراء</label><input type="number" id="product-cost" value="0" min="0" step="any"></div>
-            <div class="field"><label>سعر البيع *</label><input type="number" id="product-sell" required min="0" step="any"></div>
+            <div class="field">
+              <label>سعر الشراء</label>
+              <input type="number" id="product-cost" value="0" min="0" step="any">
+              <select id="product-cost-suggest" style="width:100%; margin-top:5px; padding:6px; border-radius:6px; border:1px solid var(--border); font-size:12px;">
+                <option value="">-- خيارات الكلفة (اختياري) --</option>
+              </select>
+              <div id="product-cost-hint" style="font-size:11.5px; color:var(--muted); margin-top:3px;"></div>
+            </div>
+            <div class="field">
+              <label>سعر البيع *</label>
+              <div style="display:flex; gap:6px; align-items:center;">
+                <input type="number" id="product-sell" required min="0" step="any" placeholder="ل.س" style="flex:1;">
+                <span style="font-size:12px; color:var(--muted);">ل.س</span>
+                <input type="number" id="product-sell-usd" min="0" step="any" placeholder="$" style="flex:1;">
+                <span style="font-size:12px; color:var(--muted);">$</span>
+              </div>
+              <div id="product-sell-hint" style="font-size:11.5px; color:var(--muted); margin-top:4px;"></div>
+            </div>
             <div class="field"><label>الكمية</label><input type="number" id="product-qty" value="0" min="0"></div>
             <div class="field"><label>حد التنبيه</label><input type="number" id="product-min" value="3" min="0"></div>
           </div>
@@ -655,6 +676,21 @@
       </div>
 
       <div class="card">
+        <h2>📊 التزام النقاط (كم عليك)</h2>
+        <p style="font-size:13px; color:var(--muted); margin-top:0;">
+          مجموع النقاط الموجودة برصيد كل الزباين، وقيمتها التقديرية لو استبدلوها كلها.
+          القيمة محسوبة على أعلى نسبة بين المحطات (الأسوأ بالنسبة إلك) - يعني الرقم الحقيقي غالبًا أقل.
+        </p>
+        <div class="form-grid">
+          <div>مجموع النقاط المعلّقة: <strong id="liab-points">0</strong></div>
+          <div>عدد الزباين اللي عندهم رصيد: <strong id="liab-customers">0</strong></div>
+          <div>قيمة الهدايا التقديرية: <strong id="liab-value">0</strong> ل.س</div>
+          <div>أعلى رصيد عند زبون: <strong id="liab-max">0</strong></div>
+        </div>
+        <button type="button" class="btn secondary tiny" id="liab-refresh-btn" style="margin-top:8px;">🔄 تحديث</button>
+      </div>
+
+      <div class="card">
         <h2>🔎 نقاط انضافت بدون فاتورة</h2>
         <p style="font-size:13px; color:var(--muted); margin-top:0;">
           أي نقاط كسب انضافت من غير ما تكون مربوطة بفاتورة بيع - المفروض تكون فاضية دايمًا.
@@ -674,6 +710,110 @@
           <table>
             <thead><tr><th>التاريخ</th><th>الرقم</th><th>الحركة</th><th>السبب</th><th>نفّذها</th></tr></thead>
             <tbody id="points-ledger-list"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- الجرد والأصناف الراكدة (صاحب المحل) ---------- -->
+    <section id="tab-stock" class="tab-panel">
+      <div class="card">
+        <h2>📋 الجرد الفعلي</h2>
+        <p style="font-size:13px; color:var(--muted); margin-top:0;">
+          دوّر عن الصنف (بالاسم أو الباركود أو الرقم) واكتب الكمية <b>الموجودة فعليًا بالرف</b>.
+          العدّ بينحفظ بالجهاز فبتقدر توقف وترجع تكمّل بأي وقت.
+          <b>ما بينتغيّر أي شي بالمخزون إلا لما تضغط "طبّق الفروقات"</b>.
+        </p>
+        <div class="input-with-scan">
+          <input type="text" id="stock-search" placeholder="بحث بالاسم / الباركود / الرقم...">
+          <button type="button" class="btn secondary" id="stock-scan-btn">📷 مسح</button>
+        </div>
+        <div style="max-height:40vh; overflow-y:auto; overflow-x:auto;">
+          <table>
+            <thead><tr><th>الرقم</th><th>المنتج</th><th>بالنظام</th><th>الفعلي</th><th>الفرق</th></tr></thead>
+            <tbody id="stock-count-list"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>📊 نتيجة الجرد</h2>
+        <div class="form-grid">
+          <div>أصناف انعدّت: <strong id="stock-counted">0</strong> من <strong id="stock-total">0</strong></div>
+          <div>أصناف فيها فرق: <strong id="stock-diff-count">0</strong></div>
+          <div>نقص بالكمية: <strong id="stock-short-qty">0</strong></div>
+          <div>قيمة النقص (بسعر الشراء): <strong id="stock-short-value">0</strong> ل.س</div>
+          <div>زيادة بالكمية: <strong id="stock-over-qty">0</strong></div>
+        </div>
+        <div style="max-height:40vh; overflow-y:auto; overflow-x:auto; margin-top:10px;">
+          <table>
+            <thead><tr><th>المنتج</th><th>بالنظام</th><th>الفعلي</th><th>الفرق</th><th>قيمة الفرق</th></tr></thead>
+            <tbody id="stock-diff-list"></tbody>
+          </table>
+        </div>
+        <button type="button" class="btn danger" id="stock-apply-btn" style="margin-top:10px;">✔ طبّق الفروقات على المخزون</button>
+        <button type="button" class="btn secondary" id="stock-clear-btn" style="margin-top:10px;">🗑 امسح العدّ وابدأ من جديد</button>
+        <p id="stock-status" style="font-size:13px; margin-top:8px;"></p>
+      </div>
+
+      <div class="card">
+        <h2>🐢 الأصناف الراكدة</h2>
+        <p style="font-size:13px; color:var(--muted); margin-top:0;">
+          أصناف عندك منها كمية وما انباع منها ولا قطعة خلال المدة المحددة - مفيدة لتقرر شو تصفّي وشو تنقل للفرع الجديد.
+        </p>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+          <label>ما انباع من آخر</label>
+          <input type="number" id="slow-days" value="60" min="7" style="width:80px; padding:6px; border-radius:6px; border:1px solid var(--border);">
+          <span>يوم</span>
+          <button type="button" class="btn secondary" id="slow-load-btn">🔍 اعرض</button>
+          <span id="slow-status" style="font-size:12px; color:var(--muted);"></span>
+        </div>
+        <div class="form-grid">
+          <div>عدد الأصناف الراكدة: <strong id="slow-count">0</strong></div>
+          <div>قيمتها بسعر الشراء: <strong id="slow-value">0</strong> ل.س</div>
+        </div>
+        <div style="max-height:50vh; overflow-y:auto; overflow-x:auto; margin-top:10px;">
+          <table>
+            <thead><tr><th>المنتج</th><th>التصنيف</th><th>الكمية</th><th>سعر الشراء</th><th>القيمة</th></tr></thead>
+            <tbody id="slow-list"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- ديون الموردين (صاحب المحل) ---------- -->
+    <section id="tab-suppliers" class="tab-panel">
+      <div class="card">
+        <h2>➕ تسجيل دين على المحل</h2>
+        <p style="font-size:13px; color:var(--muted); margin-top:0;">
+          الديون يلي <b>عليك أنت</b> للموردين - منفصلة تمامًا عن ديون الزباين إلك.
+        </p>
+        <div class="form-grid">
+          <div class="field"><label>اسم المورد *</label><input type="text" id="sup-name" placeholder="مثلاً: مؤسسة النور"></div>
+          <div class="field"><label>المبلغ *</label><input type="number" id="sup-amount" min="0" step="any"></div>
+          <div class="field"><label>تاريخ الاستحقاق</label><input type="date" id="sup-due"></div>
+          <div class="field"><label>ملاحظة</label><input type="text" id="sup-note" placeholder="رقم الفاتورة، تفاصيل..."></div>
+        </div>
+        <button class="btn" id="sup-add-btn">💾 تسجيل الدين</button>
+        <span id="sup-status" style="font-size:12px; color:var(--muted); margin-right:8px;"></span>
+      </div>
+
+      <div class="card">
+        <h2>📌 ملخص</h2>
+        <div class="form-grid">
+          <div>إجمالي المستحق عليك: <strong id="sup-total-due" style="color:var(--red);">0</strong> ل.س</div>
+          <div>عدد الديون المفتوحة: <strong id="sup-open-count">0</strong></div>
+          <div>مستحق خلال ٧ أيام: <strong id="sup-soon" style="color:var(--orange);">0</strong> ل.س</div>
+          <div>متأخر عن موعده: <strong id="sup-late" style="color:var(--red);">0</strong> ل.س</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>سجل ديون الموردين</h2>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead><tr><th>المورد</th><th>المبلغ</th><th>المدفوع</th><th>المتبقي</th><th>الاستحقاق</th><th>ملاحظة</th><th>الحالة</th><th></th></tr></thead>
+            <tbody id="sup-list"></tbody>
           </table>
         </div>
       </div>
@@ -925,6 +1065,25 @@
           </div>
           <button class="btn danger" id="move-products-btn">🔀 نقل كل المنتجات الآن</button>
         </div>
+        <div class="card">
+          <h2>💬 قالب رسالة الفاتورة على واتساب</h2>
+          <p style="font-size:13px; color:var(--muted); margin-top:0;">
+            هاد النص هو يلي بينبعت لكل زبون. استخدم المتغيّرات تحت وهي بتنبدل تلقائيًا بقيم كل فاتورة.
+            <b>أي سطر فيه متغيّرات وكلها طلعت فاضية بينحذف لحاله</b> - فما تقلق من أسطر فاضية.
+          </p>
+          <div style="font-size:12px; background:#f3f5f7; border:1px solid var(--border); border-radius:8px; padding:10px; margin-bottom:10px; line-height:2;">
+            <code>{اسم_المحل}</code> · <code>{التاريخ}</code> · <code>{رقم_الفاتورة}</code> ·
+            <code>{الأصناف}</code> · <code>{المجموع}</code> · <code>{الخصم}</code> ·
+            <code>{الإجمالي}</code> · <code>{النقاط}</code> · <code>{الرصيد}</code>
+          </div>
+          <textarea id="wa-template-input" rows="14" style="width:100%; padding:10px; border-radius:8px; border:1px solid var(--border); font-size:13px; font-family:inherit; line-height:1.8;"></textarea>
+          <div style="margin-top:8px;">
+            <button type="button" class="btn" id="wa-template-save-btn">💾 حفظ القالب</button>
+            <button type="button" class="btn secondary" id="wa-template-reset-btn">↩ رجّع القالب الافتراضي</button>
+            <span id="wa-template-status" style="font-size:12px; color:var(--muted); margin-right:8px;"></span>
+          </div>
+        </div>
+
         <button class="btn secondary" id="settings-lock-btn">🔒 إغلاق ضبط البرنامج</button>
       </div>
     </section>
@@ -1173,6 +1332,10 @@ async function refreshAll() {
     await loadActivityLog();
     await loadEmployees();
     try { await loadPointsLedger(); } catch (e) { console.error('points_ledger:', e); }
+    try { await loadPointsLiability(); } catch (e) { console.error('points_liability:', e); }
+    loadStockCounts();
+    renderStockCount();
+    try { await loadSupplierDebts(); } catch (e) { console.error('supplier_debts:', e); }
     if (reportUnlocked) { await loadReportData(); await loadDailyReport(); }
   }
 }
@@ -1347,22 +1510,48 @@ function updateCartItemPrice(idx, newPrice) {
   const subtotalEl = document.getElementById(`cart-item-subtotal-${idx}`);
   if (subtotalEl) subtotalEl.textContent = item.subtotal.toFixed(0);
   const inputEl = document.getElementById(`cart-item-price-${idx}`);
-  if (inputEl) inputEl.classList.toggle('price-overridden', item.price !== item.basePrice);
+  if (inputEl) {
+    inputEl.classList.toggle('price-overridden', item.price !== item.basePrice);
+    inputEl.classList.toggle('below-cost', isBelowCost(item));
+  }
+  // سطر تحذير "تحت الكلفة" بيتحدث فورًا مع الكتابة بدون ما نعيد رسم السلة كلها
+  const row = inputEl ? inputEl.closest('.cart-row') : null;
+  if (row) {
+    row.classList.toggle('below-cost-row', isBelowCost(item));
+    let warn = document.getElementById(`cart-item-warn-${idx}`);
+    if (isBelowCost(item)) {
+      if (!warn) {
+        warn = document.createElement('div');
+        warn.className = 'below-cost-note';
+        warn.id = `cart-item-warn-${idx}`;
+        row.appendChild(warn);
+      }
+      warn.textContent = `⚠ تحت الكلفة (${Number(item.cost).toFixed(0)}) - خسارة ${((item.cost - item.price) * item.qty).toFixed(0)} ل.س`;
+    } else if (warn) { warn.remove(); }
+  }
   updateTotals();
 }
 
+// بيع تحت الكلفة = خسارة مباشرة. منبيّنها بالأحمر فورًا بدل ما تمرق بصمت.
+function isBelowCost(item) {
+  return Number(item.cost) > 0 && Number(item.price) < Number(item.cost);
+}
+
 function renderCart() {
-  $('#cart-list').innerHTML = cart.map((item, idx) => `
-    <div class="cart-row">
+  $('#cart-list').innerHTML = cart.map((item, idx) => {
+    const low = isBelowCost(item);
+    return `
+    <div class="cart-row${low ? ' below-cost-row' : ''}">
       <span>${escapeHtml(item.name)}</span>
       <span>${item.qty} ×</span>
-      <input type="number" class="cart-price-input${item.price !== item.basePrice ? ' price-overridden' : ''}"
+      <input type="number" class="cart-price-input${item.price !== item.basePrice ? ' price-overridden' : ''}${low ? ' below-cost' : ''}"
         id="cart-item-price-${idx}" data-idx="${idx}" value="${item.price}" min="0" step="1"
         title="سعر البيع لهاي الفاتورة بس (متل هدية بتنباع اليوم بأكتر من سعرها المسجّل) - ما بيغيّر سعر المنتج بالمخزون">
       <span id="cart-item-subtotal-${idx}">${item.subtotal.toFixed(0)}</span>
       <button class="btn tiny danger remove-item" data-idx="${idx}">✕</button>
-    </div>
-  `).join('') || '<p class="empty">السلة فاضية</p>';
+      ${low ? `<div class="below-cost-note" id="cart-item-warn-${idx}">⚠ تحت الكلفة (${Number(item.cost).toFixed(0)}) - خسارة ${((item.cost - item.price) * item.qty).toFixed(0)} ل.س</div>` : ''}
+    </div>`;
+  }).join('') || '<p class="empty">السلة فاضية</p>';
   updateTotals();
 }
 
@@ -1855,6 +2044,14 @@ $('#whatsapp-dismiss-btn').addEventListener('click', hideWhatsAppSend);
 
 $('#checkout-btn').addEventListener('click', async () => {
   if (!cart.length) { alert('السلة فاضية'); return; }
+
+  // تأكيد إضافي لو في صنف عم ينباع تحت كلفته
+  const lowItems = cart.filter(isBelowCost);
+  if (lowItems.length) {
+    const totalLoss = lowItems.reduce((sum, i) => sum + (i.cost - i.price) * i.qty, 0);
+    const listTxt = lowItems.map(i => `• ${i.name}: بيع ${i.price.toFixed(0)} / كلفة ${Number(i.cost).toFixed(0)}`).join('\n');
+    if (!confirm(`⚠ في ${lowItems.length} صنف عم ينباع تحت الكلفة:\n\n${listTxt}\n\nإجمالي الخسارة: ${totalLoss.toFixed(0)} ل.س\n\nمتأكد بدك تكمّل؟`)) return;
+  }
 
   // تنبيه قبل إتمام البيع لو ما انكتب رقم موبايل (أو الرقم ناقص/غلط).
   // بينبّه بس - الكاشير فيه يكمّل عادي لو الزبون ما بدو يعطي رقمه.
@@ -2425,6 +2622,82 @@ $('#check-web-images-btn').addEventListener('click', async () => {
   }
 });
 
+// الخانتان (ل.س / $) مربوطتين بسعر الصرف: تكتب بوحدة وبتتعبى التانية تلقائيًا.
+// المحفوظ فعليًا بقاعدة البيانات = الخانة يلي بتوافق العملة المختارة فوق.
+function syncSellBoxes(source) {
+  const syp = $('#product-sell'), usd = $('#product-sell-usd'), hint = $('#product-sell-hint');
+  const rate = Number(CURRENT_USD_RATE) || 0;
+  if (!syp || !usd) return;
+  if (rate <= 0) {
+    usd.disabled = true;
+    hint.textContent = '⚠ سعر الصرف مو محدد - حدده من كرت "💱 سعر صرف الدولار" فوق حتى تشتغل خانة الدولار.';
+    return;
+  }
+  usd.disabled = false;
+  if (source === 'syp') {
+    const v = parseFloat(syp.value);
+    usd.value = (v > 0) ? (v / rate).toFixed(2) : '';
+  } else if (source === 'usd') {
+    const v = parseFloat(usd.value);
+    syp.value = (v > 0) ? Math.round(v * rate) : '';
+  }
+  const isUsd = $('#product-currency').value === 'usd';
+  hint.textContent = isUsd
+    ? `المحفوظ: سعر الدولار (بيتحدث تلقائيًا مع سعر الصرف). سعر الصرف الحالي: ${rate}`
+    : `المحفوظ: سعر الليرة (رقم ثابت). سعر الصرف الحالي: ${rate}`;
+}
+
+// خيارات الكلفة: آخر سعر شراء، ومتوسطه مع السعر المكتوب حاليًا.
+// مجرد اقتراح - ما بينكتب شي إلا لما تختار خيار من القائمة بنفسك.
+function refreshCostSuggestions() {
+  const sel = $('#product-cost-suggest'), hint = $('#product-cost-hint');
+  if (!sel) return;
+  const rec = editingProductId ? lastPurchasePriceMap[editingProductId] : null;
+  const opts = ['<option value="">-- خيارات الكلفة (اختياري) --</option>'];
+
+  if (!rec) {
+    sel.innerHTML = opts.join('');
+    hint.textContent = editingProductId
+      ? 'ما في فاتورة توريد مسجّلة لهاد المنتج بعد.'
+      : 'خيارات الكلفة بتظهر لما تفتح منتج موجود عنده فواتير توريد.';
+    return;
+  }
+
+  // آخر سعر شراء - محوّل لليرة لو الفاتورة كانت بالدولار
+  const rate = Number(CURRENT_USD_RATE) || 0;
+  const lastSyp = (rec.currency === 'usd' && rate > 0) ? Number(rec.cost) * rate : Number(rec.cost);
+  const isUsd = $('#product-currency').value === 'usd';
+  const toField = (syp) => (isUsd && rate > 0) ? +(syp / rate).toFixed(2) : Math.round(syp);
+
+  opts.push(`<option value="${toField(lastSyp)}">آخر سعر شراء: ${lastSyp.toFixed(0)} ل.س</option>`);
+
+  const typed = parseFloat($('#product-cost').value) || 0;
+  const typedSyp = (isUsd && rate > 0) ? typed * rate : typed;
+  if (typedSyp > 0) {
+    const avgSyp = (lastSyp + typedSyp) / 2;
+    opts.push(`<option value="${toField(avgSyp)}">المتوسط (آخر شراء + المكتوب) ÷ 2: ${avgSyp.toFixed(0)} ل.س</option>`);
+  }
+
+  sel.innerHTML = opts.join('');
+  hint.textContent = typedSyp > 0
+    ? 'اختار خيار وبينكتب بخانة سعر الشراء فوق.'
+    : 'اكتب سعر الشراء الجديد فوق حتى يظهر خيار المتوسط.';
+}
+
+$('#product-cost-suggest')?.addEventListener('change', (e) => {
+  if (!e.target.value) return;
+  $('#product-cost').value = e.target.value;
+  e.target.value = '';
+  refreshCostSuggestions();
+});
+
+$('#product-cost')?.addEventListener('input', refreshCostSuggestions);
+$('#product-currency')?.addEventListener('change', refreshCostSuggestions);
+
+$('#product-sell')?.addEventListener('input', () => syncSellBoxes('syp'));
+$('#product-sell-usd')?.addEventListener('input', () => syncSellBoxes('usd'));
+$('#product-currency')?.addEventListener('change', () => syncSellBoxes(null));
+
 function fillProductForm(p) {
   editingProductId = p ? p.id : null;
   $('#product-name').value = p ? p.name : '';
@@ -2432,9 +2705,15 @@ function fillProductForm(p) {
   $('#product-barcode').value = p ? (p.barcode || '') : '';
   $('#product-currency').value = p ? (p.price_currency || 'syp') : 'syp';
   $('#product-cost').value = p ? p.cost_price : 0;
-  $('#product-sell').value = p ? p.sell_price : '';
+  $('#product-sell').value = p ? (p.price_currency === 'usd' ? Math.round(productSell(p)) : p.sell_price) : '';
+  $('#product-sell-usd').value = p
+    ? (p.price_currency === 'usd' ? p.sell_price
+       : (Number(CURRENT_USD_RATE) > 0 ? (Number(p.sell_price) / CURRENT_USD_RATE).toFixed(2) : ''))
+    : '';
   $('#product-qty').value = p ? p.quantity : 0;
   $('#product-min').value = p ? p.min_quantity : 3;
+  syncSellBoxes(null);
+  refreshCostSuggestions();
 }
 
 $('#product-form-reset').addEventListener('click', () => fillProductForm(null));
@@ -2448,11 +2727,19 @@ $('#product-form').addEventListener('submit', async (e) => {
     barcode: $('#product-barcode').value.trim() || null,
     price_currency: $('#product-currency').value || 'syp',
     cost_price: parseFloat($('#product-cost').value || 0),
-    sell_price: parseFloat($('#product-sell').value || 0),
+    // بالدولار منحفظ رقم الدولار، وبالليرة منحفظ رقم الليرة
+    sell_price: $('#product-currency').value === 'usd'
+      ? parseFloat($('#product-sell-usd').value || 0)
+      : parseFloat($('#product-sell').value || 0),
     quantity: parseInt($('#product-qty').value || 0, 10),
     min_quantity: parseInt($('#product-min').value || 3, 10),
   };
-  if (!payload.name || !payload.sell_price) { alert('اسم المنتج وسعر البيع إجباريين'); return; }
+  if (!payload.name || !payload.sell_price) {
+    alert($('#product-currency').value === 'usd'
+      ? 'اسم المنتج وسعر البيع بالدولار إجباريين (المنتج معلّم "دولار")'
+      : 'اسم المنتج وسعر البيع بالليرة إجباريين');
+    return;
+  }
 
   let error;
   if (editingProductId) {
@@ -2497,6 +2784,8 @@ $('#sales-history-list').addEventListener('click', async (e) => {
   if (!confirm('متأكد تريد إلغاء هاي الفاتورة؟ رح ترجع الكمية للمخزون تلقائيًا، ولا يمكن التراجع.')) return;
   const { error } = await supabase.rpc('cancel_sale_tx', { p_sale_id: btn.dataset.id, p_performed_by: currentProfile.id });
   if (error) { alert('خطأ: ' + error.message); return; }
+  const pulled = await reverseAllSalePoints(btn.dataset.id, 'سحب نقاط - إلغاء فاتورة');
+  if (pulled) alert(`تم إلغاء الفاتورة، وانسحبت ${pulled} نقطة من رصيد الزبون.`);
   await loadSalesHistory();
   await loadProducts();
   await loadActivityLog();
@@ -2893,6 +3182,60 @@ async function awardPointsForSale(phone, saleId, amount) {
   return pts;
 }
 
+// ---- تصحيح النقاط عند الإلغاء أو المرتجع ----
+// المبدأ: ما منحذف حركة الكسب الأصلية أبدًا - منضيف حركة سالبة مقابلة،
+// فبيضل السجل كامل وبيبيّن شو صار ومتى وليش.
+async function salePointsInfo(saleId) {
+  const { data, error } = await supabase.from('points_ledger')
+    .select('delta').eq('sale_id', saleId);
+  if (error) return { earned: 0, net: 0 };
+  const rows = data || [];
+  return {
+    earned: rows.filter(r => Number(r.delta) > 0).reduce((s, r) => s + Number(r.delta), 0),
+    net: rows.reduce((s, r) => s + Number(r.delta || 0), 0),
+  };
+}
+
+async function salePhone(saleId) {
+  const { data } = await supabase.from('sales').select('customer_phone').eq('id', saleId).maybeSingle();
+  return (data && data.customer_phone) || null;
+}
+
+// سحب كل النقاط المتبقية لفاتورة (عند إلغائها بالكامل)
+async function reverseAllSalePoints(saleId, reason) {
+  const phone = await salePhone(saleId);
+  if (!phone) return 0;
+  const { net } = await salePointsInfo(saleId);
+  if (net <= 0) return 0;
+  const { error } = await supabase.from('points_ledger').insert({
+    phone, branch_id: activeBranchId, sale_id: saleId, delta: -net,
+    reason, performed_by: currentProfile ? currentProfile.id : null,
+  });
+  if (error) { console.error('تعذر تصحيح النقاط:', error.message); return 0; }
+  return net;
+}
+
+// تعديل نقاط فاتورة بقيمة مرتجع: dir = -1 خصم (مرتجع)، +1 إرجاع (حذف المرتجع)
+async function adjustSalePointsByValue(saleId, value, dir, reason) {
+  if (!saleId || !pointsConfig.active) return 0;
+  const per = Number(pointsConfig.amount_per_point) || 0;
+  if (per <= 0) return 0;
+  const phone = await salePhone(saleId);
+  if (!phone) return 0;
+  const { earned, net } = await salePointsInfo(saleId);
+  let pts = Math.floor((Number(value) || 0) / per);
+  if (pts <= 0) return 0;
+  // ما منخلي نقاط الفاتورة تنزل تحت الصفر ولا تتجاوز يلي كسبه أصلًا
+  pts = dir < 0 ? Math.min(pts, net) : Math.min(pts, earned - net);
+  if (pts <= 0) return 0;
+  const { error } = await supabase.from('points_ledger').insert({
+    phone, branch_id: activeBranchId, sale_id: saleId, delta: dir * pts,
+    reason, performed_by: currentProfile ? currentProfile.id : null,
+  });
+  if (error) { console.error('تعذر تصحيح النقاط:', error.message); return 0; }
+  return pts;
+}
+
 // ---- مؤشر الكاشير تحت خانة الرقم ----
 let cpiTimer = null, cpiPhone = null, cpiBalance = 0;
 
@@ -3005,6 +3348,29 @@ $('#redeem-body')?.addEventListener('click', async (e) => {
   }
 });
 
+// ---- التزام النقاط: كم نقطة معلّقة عند الزباين وشو قيمتها ----
+async function loadPointsLiability() {
+  if (!currentProfile || currentProfile.role !== 'owner') return;
+  await loadPointsBalances();
+  const balances = Object.values(pointsBalances).filter(v => v > 0);
+  const totalPts = balances.reduce((s, v) => s + v, 0);
+  const maxPts = balances.length ? Math.max(...balances) : 0;
+
+  // أعلى نسبة (قيمة الهدية ÷ نقاطها) بين المحطات المفعّلة - التقدير الأحوط
+  let bestRatio = 0;
+  pointsRewards.filter(r => r.active).forEach((r) => {
+    const req = Number(r.points_required) || 0;
+    if (req > 0) bestRatio = Math.max(bestRatio, (Number(r.gift_value) || 0) / req);
+  });
+
+  $('#liab-points').textContent = totalPts;
+  $('#liab-customers').textContent = balances.length;
+  $('#liab-value').textContent = Math.round(totalPts * bestRatio);
+  $('#liab-max').textContent = maxPts;
+}
+
+$('#liab-refresh-btn')?.addEventListener('click', loadPointsLiability);
+
 // ---- سجل الحركات + مراقبة النقاط بدون فاتورة ----
 async function loadPointsLedger() {
   if (!currentProfile || currentProfile.role !== 'owner') return;
@@ -3035,6 +3401,279 @@ async function loadPointsLedger() {
   $('#points-orphan-list').innerHTML = orphans.map(fmt).join('') ||
     '<tr><td colspan="5">✅ ما في نقاط انضافت بدون فاتورة</td></tr>';
 }
+
+// ================= ديون الموردين (اللي عليك أنت) =================
+let supplierDebtsCache = [];
+
+async function loadSupplierDebts() {
+  if (!currentProfile || currentProfile.role !== 'owner') return;
+  const { data, error } = await supabase.from('supplier_debts').select('*')
+    .eq('branch_id', activeBranchId)
+    .order('status', { ascending: true })
+    .order('due_date', { ascending: true, nullsFirst: false })
+    .limit(500);
+  if (error) {
+    $('#sup-list').innerHTML = `<tr><td colspan="8" style="color:var(--red);">تعذّر التحميل: ${escapeHtml(error.message)}<br><small>تأكد إنك نفّذت أمر SQL تبع جدول supplier_debts</small></td></tr>`;
+    return;
+  }
+  supplierDebtsCache = data || [];
+  renderSupplierDebts();
+}
+
+function renderSupplierDebts() {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const weekAhead = new Date(today.getTime() + 7 * 86400000);
+  let totalDue = 0, openCount = 0, soon = 0, late = 0;
+
+  $('#sup-list').innerHTML = supplierDebtsCache.map((d) => {
+    const remaining = Number(d.amount) - Number(d.paid_amount || 0);
+    const isOpen = remaining > 0.5;
+    if (isOpen) {
+      totalDue += remaining; openCount++;
+      if (d.due_date) {
+        const due = new Date(d.due_date);
+        if (due < today) late += remaining;
+        else if (due <= weekAhead) soon += remaining;
+      }
+    }
+    const overdue = isOpen && d.due_date && new Date(d.due_date) < today;
+    return `<tr${overdue ? ' style="background:#fff5f5;"' : ''}>
+      <td>${escapeHtml(d.supplier_name)}</td>
+      <td>${Number(d.amount).toFixed(0)}</td>
+      <td>${Number(d.paid_amount || 0).toFixed(0)}</td>
+      <td style="font-weight:bold; color:${isOpen ? 'var(--red)' : 'var(--green)'};">${remaining.toFixed(0)}</td>
+      <td>${d.due_date ? new Date(d.due_date).toLocaleDateString('ar') : '-'}${overdue ? ' <b style="color:var(--red);">⚠</b>' : ''}</td>
+      <td>${escapeHtml(d.note || '-')}</td>
+      <td>${isOpen ? 'مفتوح' : 'مسدد ✅'}</td>
+      <td>
+        ${isOpen ? `<button class="btn tiny sup-pay" data-id="${d.id}">تسجيل دفعة</button>` : ''}
+        <button class="btn tiny danger sup-del" data-id="${d.id}">حذف</button>
+      </td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="8">ما في ديون مسجّلة</td></tr>';
+
+  $('#sup-total-due').textContent = totalDue.toFixed(0);
+  $('#sup-open-count').textContent = openCount;
+  $('#sup-soon').textContent = soon.toFixed(0);
+  $('#sup-late').textContent = late.toFixed(0);
+}
+
+$('#sup-add-btn')?.addEventListener('click', async () => {
+  const name = ($('#sup-name').value || '').trim();
+  const amount = parseFloat($('#sup-amount').value) || 0;
+  const due = $('#sup-due').value || null;
+  const note = ($('#sup-note').value || '').trim() || null;
+  const statusEl = $('#sup-status');
+  if (!name) { statusEl.textContent = '⚠ اكتب اسم المورد'; return; }
+  if (!(amount > 0)) { statusEl.textContent = '⚠ المبلغ لازم يكون أكبر من صفر'; return; }
+  statusEl.textContent = '⏳ عم يحفظ...';
+  const { error } = await supabase.from('supplier_debts').insert({
+    branch_id: activeBranchId, supplier_name: name, amount,
+    paid_amount: 0, due_date: due, note,
+    created_by: currentProfile ? currentProfile.id : null,
+  });
+  if (error) { statusEl.textContent = '❌ ' + error.message; return; }
+  $('#sup-name').value = ''; $('#sup-amount').value = '';
+  $('#sup-due').value = ''; $('#sup-note').value = '';
+  statusEl.textContent = '✅ تم التسجيل';
+  setTimeout(() => { statusEl.textContent = ''; }, 3000);
+  await loadSupplierDebts();
+});
+
+$('#sup-list')?.addEventListener('click', async (e) => {
+  const payBtn = e.target.closest('.sup-pay');
+  if (payBtn) {
+    const d = supplierDebtsCache.find(x => x.id === payBtn.dataset.id);
+    if (!d) return;
+    const remaining = Number(d.amount) - Number(d.paid_amount || 0);
+    const input = prompt(`المتبقي لـ"${d.supplier_name}": ${remaining.toFixed(0)}\nاكتب المبلغ المدفوع الآن:`);
+    if (!input) return;
+    const amt = parseFloat(input);
+    if (!(amt > 0)) { alert('مبلغ غير صحيح'); return; }
+    const newPaid = Number(d.paid_amount || 0) + amt;
+    const { error } = await supabase.from('supplier_debts')
+      .update({ paid_amount: newPaid, status: newPaid >= Number(d.amount) ? 'paid' : 'open' })
+      .eq('id', d.id);
+    if (error) { alert('خطأ: ' + error.message); return; }
+    await supabase.from('activity_log').insert({
+      branch_id: activeBranchId, action_type: 'supplier_payment',
+      description: `دفعة لمورد: ${d.supplier_name}`,
+      amount: amt, performed_by: currentProfile ? currentProfile.id : null,
+    });
+    await loadSupplierDebts();
+    await loadActivityLog();
+    return;
+  }
+  const delBtn = e.target.closest('.sup-del');
+  if (delBtn) {
+    if (!confirm('حذف هاد الدين نهائيًا؟')) return;
+    const { error } = await supabase.from('supplier_debts').delete().eq('id', delBtn.dataset.id);
+    if (error) { alert('خطأ: ' + error.message); return; }
+    await loadSupplierDebts();
+  }
+});
+
+// ================= الجرد الفعلي =================
+// العدّ بينحفظ محليًا بالجهاز (مو بقاعدة البيانات) لأنه عملية مؤقتة ممكن تاخد أيام،
+// وما لازم تلمس المخزون إلا بقرار صريح بالآخر.
+function stockKey() { return `trend_stocktake_${activeBranchId}`; }
+let stockCounts = {}; // product_id -> الكمية الفعلية
+
+function loadStockCounts() {
+  try { stockCounts = JSON.parse(localStorage.getItem(stockKey()) || '{}'); }
+  catch (e) { stockCounts = {}; }
+}
+function saveStockCounts() {
+  try { localStorage.setItem(stockKey(), JSON.stringify(stockCounts)); } catch (e) {}
+}
+
+function renderStockCount() {
+  const listEl = $('#stock-count-list');
+  if (!listEl) return;
+  const q = ($('#stock-search')?.value || '').trim().toLowerCase();
+  const rows = productsCache.filter(p =>
+    !q || String(p.name || '').toLowerCase().includes(q) ||
+    String(p.barcode || '').toLowerCase().includes(q) ||
+    String(p.serial_no || '').includes(q));
+
+  listEl.innerHTML = rows.slice(0, 200).map((p) => {
+    const actual = stockCounts[p.id];
+    const has = actual !== undefined && actual !== '';
+    const diff = has ? Number(actual) - Number(p.quantity) : null;
+    const color = diff === null ? 'var(--muted)' : (diff < 0 ? 'var(--red)' : (diff > 0 ? 'var(--orange)' : 'var(--green)'));
+    return `<tr>
+      <td style="color:var(--muted);">${p.serial_no != null ? p.serial_no : '-'}</td>
+      <td>${escapeHtml(p.name)}</td>
+      <td>${p.quantity}</td>
+      <td><input type="number" class="stock-actual" data-id="${p.id}" value="${has ? actual : ''}" min="0" placeholder="-" style="width:70px; padding:5px; border-radius:6px; border:1px solid var(--border); text-align:center;"></td>
+      <td style="color:${color}; font-weight:bold;">${diff === null ? '-' : (diff > 0 ? '+' + diff : diff)}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="5">ما في أصناف مطابقة</td></tr>';
+  renderStockSummary();
+}
+
+function stockDiffRows() {
+  const rows = [];
+  productsCache.forEach((p) => {
+    const actual = stockCounts[p.id];
+    if (actual === undefined || actual === '') return;
+    const diff = Number(actual) - Number(p.quantity);
+    if (diff === 0) return;
+    rows.push({ id: p.id, name: p.name, sys: Number(p.quantity), actual: Number(actual), diff, cost: productCost(p) });
+  });
+  return rows.sort((a, b) => a.diff - b.diff);
+}
+
+function renderStockSummary() {
+  const counted = Object.values(stockCounts).filter(v => v !== '' && v !== undefined).length;
+  const diffs = stockDiffRows();
+  const short = diffs.filter(r => r.diff < 0);
+  const over = diffs.filter(r => r.diff > 0);
+  $('#stock-counted').textContent = counted;
+  $('#stock-total').textContent = productsCache.length;
+  $('#stock-diff-count').textContent = diffs.length;
+  $('#stock-short-qty').textContent = short.reduce((s, r) => s + Math.abs(r.diff), 0);
+  $('#stock-short-value').textContent = short.reduce((s, r) => s + Math.abs(r.diff) * r.cost, 0).toFixed(0);
+  $('#stock-over-qty').textContent = over.reduce((s, r) => s + r.diff, 0);
+  $('#stock-diff-list').innerHTML = diffs.map(r => `
+    <tr>
+      <td>${escapeHtml(r.name)}</td>
+      <td>${r.sys}</td>
+      <td>${r.actual}</td>
+      <td style="color:${r.diff < 0 ? 'var(--red)' : 'var(--orange)'}; font-weight:bold;">${r.diff > 0 ? '+' + r.diff : r.diff}</td>
+      <td>${(Math.abs(r.diff) * r.cost).toFixed(0)}</td>
+    </tr>`).join('') || '<tr><td colspan="5">ما في فروقات - كل يلي انعدّ مطابق ✅</td></tr>';
+}
+
+$('#stock-search')?.addEventListener('input', renderStockCount);
+
+$('#stock-count-list')?.addEventListener('input', (e) => {
+  const inp = e.target.closest('.stock-actual');
+  if (!inp) return;
+  const id = inp.dataset.id;
+  if (inp.value === '') delete stockCounts[id];
+  else stockCounts[id] = Number(inp.value);
+  saveStockCounts();
+  const p = productsCache.find(x => x.id === id);
+  const cell = inp.closest('tr').lastElementChild;
+  if (p && cell) {
+    const d = (inp.value === '') ? null : Number(inp.value) - Number(p.quantity);
+    cell.textContent = d === null ? '-' : (d > 0 ? '+' + d : d);
+    cell.style.color = d === null ? 'var(--muted)' : (d < 0 ? 'var(--red)' : (d > 0 ? 'var(--orange)' : 'var(--green)'));
+  }
+  renderStockSummary();
+});
+
+$('#stock-apply-btn')?.addEventListener('click', async () => {
+  const diffs = stockDiffRows();
+  const statusEl = $('#stock-status');
+  if (!diffs.length) { statusEl.textContent = 'ما في فروقات لتطبيقها'; return; }
+  if (!confirm(`تعديل كمية ${diffs.length} صنف بالمخزون حسب العدّ الفعلي؟\nما فيك تتراجع تلقائيًا.`)) return;
+  $('#stock-apply-btn').disabled = true;
+  statusEl.textContent = '⏳ عم يطبّق...';
+  try {
+    for (const r of diffs) {
+      const { error } = await supabase.from('products').update({ quantity: r.actual }).eq('id', r.id);
+      if (error) throw error;
+    }
+    const shortVal = diffs.filter(r => r.diff < 0).reduce((s, r) => s + Math.abs(r.diff) * r.cost, 0);
+    await supabase.from('activity_log').insert({
+      branch_id: activeBranchId, action_type: 'stocktake_applied',
+      description: `جرد فعلي - تعديل ${diffs.length} صنف (قيمة النقص ${shortVal.toFixed(0)})`,
+      amount: shortVal, performed_by: currentProfile ? currentProfile.id : null,
+    });
+    stockCounts = {};
+    saveStockCounts();
+    statusEl.textContent = `✅ تم تعديل ${diffs.length} صنف، والعدّ انمسح للجرد الجاي`;
+    await loadProducts();
+    renderStockCount();
+  } catch (err) {
+    statusEl.textContent = '❌ ' + err.message;
+  } finally {
+    $('#stock-apply-btn').disabled = false;
+  }
+});
+
+$('#stock-clear-btn')?.addEventListener('click', () => {
+  if (!confirm('مسح كل العدّ الحالي؟ المخزون ما بيتأثر.')) return;
+  stockCounts = {};
+  saveStockCounts();
+  renderStockCount();
+  $('#stock-status').textContent = 'انمسح العدّ';
+});
+
+// ================= الأصناف الراكدة =================
+$('#slow-load-btn')?.addEventListener('click', async () => {
+  const days = Math.max(7, parseInt($('#slow-days').value, 10) || 60);
+  const statusEl = $('#slow-status');
+  statusEl.textContent = '⏳ عم يحسب...';
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+  const { data, error } = await supabase
+    .from('sale_items')
+    .select('product_id, sales!inner(branch_id, status, sale_date)')
+    .eq('sales.branch_id', activeBranchId)
+    .eq('sales.status', 'completed')
+    .gte('sales.sale_date', since);
+  if (error) { statusEl.textContent = '❌ ' + error.message; return; }
+
+  const sold = new Set((data || []).map(r => r.product_id).filter(Boolean));
+  const rows = productsCache
+    .filter(p => Number(p.quantity) > 0 && !sold.has(p.id))
+    .map(p => ({ name: p.name, cat: p.category || '-', qty: Number(p.quantity), cost: productCost(p) }))
+    .sort((a, b) => (b.qty * b.cost) - (a.qty * a.cost));
+
+  $('#slow-count').textContent = rows.length;
+  $('#slow-value').textContent = rows.reduce((s, r) => s + r.qty * r.cost, 0).toFixed(0);
+  $('#slow-list').innerHTML = rows.map(r => `
+    <tr>
+      <td>${escapeHtml(r.name)}</td>
+      <td>${escapeHtml(r.cat)}</td>
+      <td>${r.qty}</td>
+      <td>${r.cost.toFixed(0)}</td>
+      <td>${(r.qty * r.cost).toFixed(0)}</td>
+    </tr>`).join('') || '<tr><td colspan="5">ما في أصناف راكدة بهاي المدة ✅</td></tr>';
+  statusEl.textContent = `تم - ${rows.length} صنف`;
+});
 
 // ---------------- قاعدة الزباين (من أرقام الفواتير) ----------------
 // بتتبنى من عمود sales.customer_phone يلي بينتعبى من خانة رقم الموبايل وقت البيع.
@@ -3369,7 +4008,8 @@ $('#return-sale-items').addEventListener('click', async (e) => {
     amount: qty * unitPrice, performed_by: currentProfile.id,
   });
 
-  alert('تم تسجيل المرتجع ✅');
+  const pulledPts = await adjustSalePointsByValue(saleId, qty * unitPrice, -1, `سحب نقاط - مرتجع: ${productName}`);
+  alert('تم تسجيل المرتجع ✅' + (pulledPts ? `\nوانسحبت ${pulledPts} نقطة من رصيد الزبون.` : ''));
   await loadProducts();
   await loadReturns();
   await loadActivityLog();
@@ -3431,7 +4071,7 @@ async function loadReturns() {
       <td>${escapeHtml(r.note || '-')}</td>
       <td><button type="button" class="btn danger tiny delete-return-btn"
         data-return-id="${r.id}" data-product-id="${r.product_id || ''}" data-type="${r.type}"
-        data-qty="${r.quantity}" data-unit-price="${r.unit_price}"
+        data-qty="${r.quantity}" data-unit-price="${r.unit_price}" data-sale-id="${r.sale_id || ''}"
         data-product-name="${escapeHtml(r.product_name)}">🗑 احذف مرتجع نفّذتو</button></td>
     </tr>
   `).join('') || '<tr><td colspan="7">لا يوجد مرتجعات</td></tr>';
@@ -3473,7 +4113,12 @@ $('#returns-list').addEventListener('click', async (e) => {
     amount: qty * unitPrice, performed_by: currentProfile.id,
   });
 
-  alert('تم حذف المرتجع ✅');
+  const saleIdOfReturn = btn.dataset.saleId || null;
+  let restoredPts = 0;
+  if (type === 'customer' && saleIdOfReturn) {
+    restoredPts = await adjustSalePointsByValue(saleIdOfReturn, qty * unitPrice, 1, `إرجاع نقاط - حذف مرتجع: ${productName}`);
+  }
+  alert('تم حذف المرتجع ✅' + (restoredPts ? `\nورجعت ${restoredPts} نقطة لرصيد الزبون.` : ''));
   await loadProducts();
   await loadReturns();
   await loadActivityLog();
