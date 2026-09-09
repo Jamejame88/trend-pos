@@ -359,6 +359,10 @@
                 <option value="app">تطبيق واتساب (بدون تبويب متصفح)</option>
                 <option value="web">متصفح - واتساب ويب</option>
               </select>
+              <label style="display:flex; align-items:center; gap:5px; margin-inline-start:8px;">
+                <input type="checkbox" id="wa-review-mode" style="width:auto;">
+                راجع الرسالة قبل الإرسال
+              </label>
             </div>
             <div id="customer-points-info" style="display:none; margin-top:6px; padding:8px 10px; border:1px solid #cfe3ff; border-radius:8px; background:#f5faff; font-size:13px;">
               <div id="cpi-line"></div>
@@ -370,7 +374,12 @@
           </div>
           <button class="btn block" id="checkout-btn" style="margin-top:10px;">✔ إتمام عملية البيع</button>
           <div id="whatsapp-send-wrap" style="display:none; margin-top:10px; padding:10px; border:1px solid #25D366; border-radius:8px; background:#f0fff5;">
-            <div style="font-size:13px; margin-bottom:8px;">📱 فاتورة الزبون <b id="whatsapp-send-phone" dir="ltr"></b> — لو ما فتح واتساب تلقائيًا، اضغط تحت:</div>
+            <div style="font-size:13px; margin-bottom:8px;">📱 فاتورة الزبون <b id="whatsapp-send-phone" dir="ltr"></b></div>
+            <details id="whatsapp-preview-wrap" style="margin-bottom:8px;">
+              <summary style="font-size:12px; cursor:pointer; color:var(--muted);">👁 اعرض/عدّل نص الرسالة</summary>
+              <textarea id="whatsapp-text" rows="10" style="width:100%; margin-top:6px; padding:8px; border-radius:8px; border:1px solid var(--border); font-size:12.5px; font-family:inherit; line-height:1.7;"></textarea>
+              <div style="font-size:11px; color:var(--muted);">أي تعديل هون بينبعت للزبون - بيخص هاي الفاتورة بس.</div>
+            </details>
             <button type="button" class="btn block" id="whatsapp-send-btn" style="background:#25D366;">فتح واتساب وإرسال الفاتورة</button>
             <button type="button" class="btn secondary tiny" id="whatsapp-dismiss-btn" style="margin-top:6px;">إخفاء</button>
           </div>
@@ -540,7 +549,7 @@
         <h2>آخر 100 فاتورة (الفرع الحالي)</h2>
         <div style="overflow-x:auto;">
           <table>
-            <thead><tr><th>التاريخ</th><th>الإجمالي</th><th>المدفوع</th><th>الحالة</th><th></th></tr></thead>
+            <thead><tr><th>رقم الفاتورة</th><th>التاريخ</th><th>الإجمالي</th><th>المدفوع</th><th>الحالة</th><th></th></tr></thead>
             <tbody id="sales-history-list"></tbody>
           </table>
         </div>
@@ -1143,6 +1152,7 @@ $$('.tab-btn').forEach(btn => {
 // ---------------- تحميل البيانات ----------------
 async function refreshAll() {
   await loadProducts();
+  try { await loadWaTemplate(); } catch (e) { console.error('wa_template:', e); }
   try { await loadPointsConfig(); } catch (e) { console.error('points_config:', e); }
   try { await loadPointsRewards(); } catch (e) {
     console.error('points_rewards:', e);
@@ -1667,32 +1677,105 @@ function normalizePhoneForWa(raw) {
   return null;
 }
 
-// نص الفاتورة متل ما بيوصل الزبون - بدون أي إعلان أو ترويج
-function buildWhatsAppInvoiceText({ date, items, subtotal, discount, total, saleIdShort, earnedPoints = 0, balancePoints = 0 }) {
-  const lines = [];
-  lines.push(`*${SHOP_NAME}* - ${SHOP_SUBTITLE}`);
-  lines.push('');
-  lines.push(`التاريخ: ${date}`);
-  if (saleIdShort) lines.push(`رقم الفاتورة: ${saleIdShort}`);
-  lines.push('------------------------');
-  (items || []).forEach(it => {
-    lines.push(`${it.name} × ${it.qty} = ${Number(it.subtotal).toFixed(0)}`);
-  });
-  lines.push('------------------------');
-  if (Number(discount) > 0) {
-    lines.push(`المجموع: ${Number(subtotal).toFixed(0)}`);
-    lines.push(`الخصم: ${Number(discount).toFixed(0)}`);
-  }
-  lines.push(`*الإجمالي: ${Number(total).toFixed(0)} ل.س*`);
-  if (earnedPoints > 0) {
-    lines.push('');
-    lines.push(`⭐ نقاط هاي الفاتورة: ${earnedPoints}`);
-    lines.push(`رصيدك الكلي: ${balancePoints} نقطة`);
-  }
-  lines.push('');
-  lines.push('شكرًا لزيارتكم 🌸');
-  return lines.join('\n');
+// رقم الفاتورة المتسلسل (sales.invoice_no، بيبلش من 1001) - TREND-1001
+function formatInvoiceNo(n) {
+  return (n === null || n === undefined || n === '') ? '' : `TREND-${n}`;
 }
+
+// ---------------- قالب رسالة الفاتورة (قابل للتعديل من "ضبط البرنامج") ----------------
+const WA_TEMPLATE_DEFAULT = [
+  '*{اسم_المحل}*',
+  '',
+  'التاريخ: {التاريخ}',
+  'رقم الفاتورة: {رقم_الفاتورة}',
+  '------------------------',
+  '{الأصناف}',
+  '------------------------',
+  'المجموع: {المجموع}',
+  'الخصم: {الخصم}',
+  '*الإجمالي: {الإجمالي} ل.س*',
+  '',
+  '⭐ نقاط هاي الفاتورة: {النقاط}',
+  'رصيدك الكلي: {الرصيد} نقطة',
+  '',
+  'شكرًا لزيارتكم 🌸',
+].join('\n');
+
+let WA_TEMPLATE = WA_TEMPLATE_DEFAULT;
+
+async function loadWaTemplate() {
+  const { data, error } = await supabase.from('settings').select('value')
+    .eq('branch_id', activeBranchId).eq('key', 'wa_invoice_template').maybeSingle();
+  WA_TEMPLATE = (!error && data && data.value) ? data.value : WA_TEMPLATE_DEFAULT;
+  const box = $('#wa-template-input');
+  if (box && document.activeElement !== box) box.value = WA_TEMPLATE;
+}
+
+// بيبدّل المتغيّرات بقيمها، وبيحذف أي سطر كان فيه متغيّر وطلع فاضي
+// (مثلاً سطر "الخصم" لما ما يكون في خصم، أو أسطر النقاط لما تكون صفر).
+function renderWaTemplate(tpl, vars) {
+  const out = [];
+  String(tpl || '').split('\n').forEach((line) => {
+    let hadVar = false, gotValue = false;
+    const filled = line.replace(/\{([^}]+)\}/g, (m, k) => {
+      hadVar = true;
+      const v = vars[String(k).trim()];
+      const txt = (v === undefined || v === null) ? '' : String(v);
+      if (txt.trim()) gotValue = true;
+      return txt;
+    });
+    // السطر بينحذف إذا كان فيه متغيّرات وكلها طلعت فاضية -
+    // حتى لو السطر فيه نص ثابت (مثلاً "الخصم: " لما ما يكون في خصم).
+    if (hadVar && !gotValue) return;
+    out.push(filled);
+  });
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// نص الفاتورة متل ما بيوصل الزبون - مبني من القالب المحفوظ
+function buildWhatsAppInvoiceText({ date, items, subtotal, discount, total, saleIdShort, earnedPoints = 0, balancePoints = 0 }) {
+  const hasDiscount = Number(discount) > 0;
+  const hasPoints = Number(earnedPoints) > 0;
+  return renderWaTemplate(WA_TEMPLATE, {
+    'اسم_المحل': `${SHOP_NAME} - ${SHOP_SUBTITLE}`,
+    'التاريخ': date || '',
+    'رقم_الفاتورة': saleIdShort || '',
+    'الأصناف': (items || []).map(it =>
+      `${it.name} × ${it.qty} = ${Number(it.subtotal).toFixed(0)}`).join('\n'),
+    'المجموع': hasDiscount ? Number(subtotal).toFixed(0) : '',
+    'الخصم': hasDiscount ? Number(discount).toFixed(0) : '',
+    'الإجمالي': Number(total).toFixed(0),
+    'النقاط': hasPoints ? String(earnedPoints) : '',
+    'الرصيد': hasPoints ? String(balancePoints) : '',
+  });
+}
+
+$('#wa-template-save-btn')?.addEventListener('click', async () => {
+  const val = $('#wa-template-input').value;
+  const statusEl = $('#wa-template-status');
+  if (!val.trim()) { statusEl.textContent = '⚠ القالب ما بيصير يكون فاضي'; return; }
+  statusEl.textContent = '⏳ عم يحفظ...';
+  const { data: existing } = await supabase.from('settings').select('key')
+    .eq('branch_id', activeBranchId).eq('key', 'wa_invoice_template').maybeSingle();
+  let error;
+  if (existing) {
+    ({ error } = await supabase.from('settings').update({ value: val })
+      .eq('branch_id', activeBranchId).eq('key', 'wa_invoice_template'));
+  } else {
+    ({ error } = await supabase.from('settings')
+      .insert({ branch_id: activeBranchId, key: 'wa_invoice_template', value: val }));
+  }
+  if (error) { statusEl.textContent = '❌ ' + error.message; return; }
+  WA_TEMPLATE = val;
+  statusEl.textContent = '✅ تم حفظ القالب';
+  setTimeout(() => { statusEl.textContent = ''; }, 3000);
+});
+
+$('#wa-template-reset-btn')?.addEventListener('click', () => {
+  if (!confirm('ترجيع القالب الافتراضي؟ التعديلات الحالية رح تنشال من المربع (لازم تضغط حفظ لتثبيتها).')) return;
+  $('#wa-template-input').value = WA_TEMPLATE_DEFAULT;
+  $('#wa-template-status').textContent = 'رجع القالب الافتراضي - اضغط حفظ لتثبيته';
+});
 
 let pendingWaUrl = null;
 let waWin = null;      // نافذة واتساب المفتوحة لحظة الضغط (قبل انتظار السيرفر)
@@ -1724,16 +1807,39 @@ function waUsesApp() { return WA_IS_MOBILE || getWaOpenMode() === 'app'; }
     try { localStorage.setItem(WA_MODE_KEY, sel.value); } catch (e) {}
   });
 })();
+let pendingWaPhone = null;
 function showWhatsAppSend(phone, text) {
+  pendingWaPhone = phone;
   pendingWaUrl = buildWaLink(phone, text);
+  $('#whatsapp-text').value = text;              // النص قابل للتعديل قبل الإرسال
+  $('#whatsapp-preview-wrap').open = waReviewMode(); // بينفتح لحاله بوضع المراجعة
   $('#whatsapp-send-phone').textContent = phone;
   $('#whatsapp-send-wrap').style.display = 'block';
 }
 function hideWhatsAppSend() {
   pendingWaUrl = null;
+  pendingWaPhone = null;
   $('#whatsapp-send-wrap').style.display = 'none';
 }
+
+// وضع المراجعة: لما يكون شغّال، واتساب ما بينفتح تلقائيًا -
+// الكاشير بيراجع النص (ويعدّله لو بده) وبعدين بيضغط إرسال.
+const WA_REVIEW_KEY = 'trend_wa_review';
+function waReviewMode() {
+  try { return localStorage.getItem(WA_REVIEW_KEY) === '1'; } catch (e) { return false; }
+}
+(function initWaReview() {
+  const cb = $('#wa-review-mode');
+  if (!cb) return;
+  cb.checked = waReviewMode();
+  cb.addEventListener('change', () => {
+    try { localStorage.setItem(WA_REVIEW_KEY, cb.checked ? '1' : '0'); } catch (e) {}
+  });
+})();
 $('#whatsapp-send-btn').addEventListener('click', () => {
+  // منعيد بناء الرابط من النص الحالي بالمربع - عشان أي تعديل يدوي ينبعت فعلًا
+  const edited = ($('#whatsapp-text').value || '').trim();
+  if (pendingWaPhone && edited) pendingWaUrl = buildWaLink(pendingWaPhone, edited);
   if (!pendingWaUrl) return;
   if (waUsesApp()) {
     // بيسلّم الرابط لتطبيق واتساب - صفحة نقطة البيع بتضل مفتوحة ورا التطبيق
@@ -1772,7 +1878,7 @@ $('#checkout-btn').addEventListener('click', async () => {
   // يعتبرها ناتجة عن تفاعل بشري. هيك بتصير العملية كلها بضغطة وحدة.
   waWinUsed = false;
   const waPhonePre = normalizePhoneForWa($('#customer-phone-input').value);
-  if (waPhonePre && !waUsesApp()) {
+  if (waPhonePre && !waUsesApp() && !waReviewMode()) {
     waWin = window.open('', 'trend_whatsapp');
     try {
       if (waWin) waWin.document.write('<div style="font-family:sans-serif;direction:rtl;text-align:center;padding:40px;color:#555">⏳ جارٍ تجهيز الفاتورة...</div>');
@@ -1894,6 +2000,13 @@ $('#checkout-btn').addEventListener('click', async () => {
 
   alert(`تمت عملية البيع بنجاح ✅\nالإجمالي: ${total.toFixed(0)}\nالباقي: ${change.toFixed(0)}`);
 
+  // الرقم المتسلسل للفاتورة (TREND-1001) - بينقرا بعد الإنشاء لأنه بينتولد بقاعدة البيانات
+  let invoiceNoText = '';
+  try {
+    const { data: saleRow } = await supabase.from('sales').select('invoice_no').eq('id', saleId).maybeSingle();
+    invoiceNoText = formatInvoiceNo(saleRow && saleRow.invoice_no);
+  } catch (e) { console.error('تعذر قراءة رقم الفاتورة:', e); }
+
   // حفظ رقم الزبون بالفاتورة + فتح واتساب تلقائيًا (بس إذا الكاشير كتب رقم)
   const waPhone = normalizePhoneForWa($('#customer-phone-input').value);
   if (waPhone) {
@@ -1906,11 +2019,14 @@ $('#checkout-btn').addEventListener('click', async () => {
       date: new Date().toLocaleString('ar'),
       items: cart.map(i => ({ name: i.name, qty: i.qty, subtotal: i.subtotal })),
       subtotal, discount, total,
-      saleIdShort: saleId ? String(saleId).slice(0, 8) : '',
+      saleIdShort: invoiceNoText,
       earnedPoints: earned, balancePoints: newBalance,
     });
     showWhatsAppSend(waPhone, waText); // كرت احتياطي - بيفيد بس لو المتصفح حجب الفتح التلقائي
-    if (waUsesApp()) {
+    if (waReviewMode()) {
+      // وضع المراجعة: ما منفتح شي - الكاشير بيراجع النص بالكرت الأخضر وبيضغط إرسال
+      if (waWin) { try { waWin.close(); } catch (e) {} }
+    } else if (waUsesApp()) {
       // بيسلّم الرابط لتطبيق واتساب - ما بينفتح ولا تبويب متصفح، وصفحة نقطة البيع بتضل مكانها
       window.location.href = buildWaLink(waPhone, waText);
     } else if (waWin) {
@@ -2360,6 +2476,7 @@ async function loadSalesHistory() {
   if (error) { console.error(error); return; }
   $('#sales-history-list').innerHTML = (data || []).map(s => `
     <tr class="${s.status === 'cancelled' ? 'cancelled-row' : ''}">
+      <td dir="ltr" style="font-weight:bold; color:var(--muted);">${escapeHtml(formatInvoiceNo(s.invoice_no) || '-')}</td>
       <td>${new Date(s.sale_date).toLocaleString('ar')}</td>
       <td>${Number(s.total).toFixed(0)}</td>
       <td>${Number(s.paid).toFixed(0)}</td>
@@ -2369,7 +2486,7 @@ async function loadSalesHistory() {
         <button class="btn tiny secondary print-sale" data-id="${s.id}">🖨 طباعة</button>
       </td>
     </tr>
-  `).join('') || '<tr><td colspan="5">لا يوجد فواتير</td></tr>';
+  `).join('') || '<tr><td colspan="6">لا يوجد فواتير</td></tr>';
 }
 
 $('#sales-history-list').addEventListener('click', async (e) => {
@@ -2531,6 +2648,7 @@ function rewardProducts(reward) {
 // بقائمة المحطة، إلا إذا صاحب المحل علّم "أظهر كل الأصناف" لهاي المحطة.
 const REWARD_PRICE_TOLERANCE = 0.20;
 let rewardShowAll = {}; // reward_id -> true لو بده يشوف كل الأصناف
+let rewardStatusMsg = null; // آخر رسالة حالة - بتنعاد بعد إعادة رسم المحطات
 
 // ترتيب آمن: لو منتج اسمه فاضي/ناقص، String() بتحميه من رمي خطأ يوقف كل العرض
 function byNameAr(a, b) {
@@ -2579,7 +2697,7 @@ function renderPointsRewards() {
       const label = prod ? prod.name : 'صنف من فرع تاني';
       return `<span style="display:inline-flex; align-items:center; gap:5px; background:#eef2f6; border-radius:14px; padding:4px 10px; margin:3px 3px 0 0; font-size:12px;">
         ${escapeHtml(label)}
-        <button class="btn tiny danger reward-item-del" data-item-id="${it.id}" style="padding:1px 6px;">✕</button>
+        <button class="btn tiny danger reward-item-del" data-item-id="${it.id}" data-reward-id="${r.id}" style="padding:1px 6px;">✕</button>
       </span>`;
     }).join('') || '<span style="color:var(--muted); font-size:12px;">ما في أصناف مربوطة لهاي المحطة بعد</span>';
 
@@ -2613,13 +2731,14 @@ function renderPointsRewards() {
         <select class="reward-add-select" data-id="${r.id}" style="max-width:240px; padding:6px; border-radius:6px; border:1px solid var(--border);">
           <option value="">-- اختر صنف لإضافته --</option>${matchOptions}
         </select>
-        <button class="btn tiny secondary reward-add-btn" data-id="${r.id}">➕ اربط الصنف</button>
+        <button class="btn tiny secondary reward-add-btn" data-id="${r.id}" ${matches.length ? '' : 'disabled'}>➕ اربط الصنف</button>
         <label style="display:flex; align-items:center; gap:5px; font-size:11.5px; color:var(--muted);">
           <input type="checkbox" class="reward-show-all" data-id="${r.id}" ${rewardShowAll[r.id] ? 'checked' : ''} style="width:auto;">
           أظهر كل الأصناف
         </label>
       </div>
       <div style="font-size:11.5px; color:var(--muted); margin-top:4px;">${matchNote}</div>
+      <div class="reward-status" data-id="${r.id}" style="font-size:12px; margin-top:6px; min-height:16px;"></div>
     </div>`;
   }).join('');
   } catch (err) {
@@ -2631,6 +2750,10 @@ function renderPointsRewards() {
   }
   const rb2 = $('#points-retry-btn');
   if (rb2) rb2.addEventListener('click', loadPointsRewards);
+  if (rewardStatusMsg) {
+    const el = document.querySelector(`.reward-status[data-id="${rewardStatusMsg.id}"]`);
+    if (el) { el.textContent = rewardStatusMsg.msg; el.style.color = rewardStatusMsg.ok ? 'var(--green)' : 'var(--red)'; }
+  }
 }
 
 $('#points-config-save-btn')?.addEventListener('click', async () => {
@@ -2654,35 +2777,59 @@ $('#points-rewards-list')?.addEventListener('change', (e) => {
 });
 
 $('#points-rewards-list')?.addEventListener('click', async (e) => {
+  // رسالة حالة جنب المحطة نفسها - أوضح من alert وبتضل ظاهرة بعد إعادة الرسم
+  const say = (id, msg, ok) => {
+    rewardStatusMsg = { id, msg, ok };
+    const el = document.querySelector(`.reward-status[data-id="${id}"]`);
+    if (el) { el.textContent = msg; el.style.color = ok ? 'var(--green)' : 'var(--red)'; }
+  };
+
   const saveBtn = e.target.closest('.reward-save');
   if (saveBtn) {
     const id = saveBtn.dataset.id;
-    const wrap = saveBtn.closest('div').parentNode;
-    const pts = parseInt(wrap.querySelector(`.reward-points[data-id="${id}"]`).value, 10) || 0;
-    const val = parseFloat(wrap.querySelector(`.reward-value[data-id="${id}"]`).value) || 0;
-    const act = wrap.querySelector(`.reward-active[data-id="${id}"]`).checked;
-    if (pts <= 0) { alert('عدد النقاط لازم يكون أكبر من صفر'); return; }
+    const pts = parseInt(document.querySelector(`.reward-points[data-id="${id}"]`).value, 10) || 0;
+    const val = parseFloat(document.querySelector(`.reward-value[data-id="${id}"]`).value) || 0;
+    const act = document.querySelector(`.reward-active[data-id="${id}"]`).checked;
+    if (pts <= 0) { say(id, '⚠ عدد النقاط لازم يكون أكبر من صفر', false); return; }
+    say(id, '⏳ عم يحفظ...', true);
     const { error } = await supabase.from('points_rewards')
       .update({ points_required: pts, gift_value: val, active: act }).eq('id', id);
-    if (error) { alert('خطأ بالحفظ: ' + error.message); return; }
+    if (error) { say(id, '❌ ' + error.message, false); return; }
+    say(id, '✅ تم حفظ المحطة', true);
     await loadPointsRewards();
     return;
   }
+
   const addBtn = e.target.closest('.reward-add-btn');
   if (addBtn) {
     const id = addBtn.dataset.id;
     const sel = document.querySelector(`.reward-add-select[data-id="${id}"]`);
-    if (!sel || !sel.value) { alert('اختار صنف أول'); return; }
+    if (!sel || !sel.options.length || sel.options.length <= 1) {
+      say(id, '⚠ القائمة فاضية - ما في صنف سعره ضمن مدى قيمة الهدية. علّم "أظهر كل الأصناف" أو غيّر قيمة الهدية واضغط حفظ.', false);
+      return;
+    }
+    if (!sel.value) { say(id, '⚠ اختار صنف من القائمة أول', false); return; }
+    const chosen = productsCache.find(x => x.id === sel.value);
+    say(id, '⏳ عم يربط...', true);
     const { error } = await supabase.from('points_reward_items')
       .insert({ reward_id: id, product_id: sel.value });
-    if (error) { alert(error.message.includes('duplicate') ? 'هاد الصنف مربوط أصلًا بهاي المحطة' : 'خطأ: ' + error.message); return; }
+    if (error) {
+      say(id, /duplicate|unique/i.test(error.message)
+        ? '⚠ هاد الصنف مربوط أصلًا بهاي المحطة'
+        : '❌ ' + error.message, false);
+      return;
+    }
+    say(id, `✅ تم ربط "${chosen ? chosen.name : 'الصنف'}"`, true);
     await loadPointsRewards();
     return;
   }
+
   const delBtn = e.target.closest('.reward-item-del');
   if (delBtn) {
+    const rewardId = (delBtn.closest('[class]') && delBtn.dataset.rewardId) || null;
     const { error } = await supabase.from('points_reward_items').delete().eq('id', delBtn.dataset.itemId);
-    if (error) { alert('خطأ: ' + error.message); return; }
+    if (error) { alert('خطأ بحذف الربط: ' + error.message); return; }
+    if (rewardId) say(rewardId, '✅ انشال الصنف من المحطة', true);
     await loadPointsRewards();
   }
 });
@@ -4510,7 +4657,7 @@ async function printSaleById(saleId) {
     total: sale.total,
     paid: sale.paid,
     change: sale.change_due,
-    saleIdShort: String(sale.id).slice(0, 8),
+    saleIdShort: formatInvoiceNo(sale.invoice_no),
   }));
 }
 
