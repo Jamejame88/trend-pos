@@ -2751,15 +2751,38 @@ function refreshCostSuggestions() {
 
   const typed = parseFloat($('#product-cost').value) || 0;
   const typedSyp = (isUsd && rate > 0) ? typed * rate : typed;
+
+  // ——— المتوسط المرجّح حسب الكميات (الحساب المحاسبي الصحيح) ———
+  // كلفة المخزون الجديدة = (كمية قديمة × كلفتها + كمية مضافة × كلفتها) ÷ المجموع
+  const prod = productsCache.find(x => x.id === editingProductId);
+  let weightedNote = '';
+  if (prod && typedSyp > 0) {
+    const oldQty = Number(prod.quantity) || 0;
+    const newQty = parseInt($('#product-qty').value, 10);
+    const added = (!isNaN(newQty) ? newQty : oldQty) - oldQty;
+    if (added > 0 && oldQty > 0) {
+      const oldCostSyp = productCost(prod);
+      const wAvg = ((oldQty * oldCostSyp) + (added * typedSyp)) / (oldQty + added);
+      opts.push(`<option value="${toField(wAvg)}">✔ المتوسط المرجّح (${oldQty}×${oldCostSyp.toFixed(0)} + ${added}×${typedSyp.toFixed(0)}): ${wAvg.toFixed(0)} ل.س</option>`);
+      weightedNote = `عندك ${oldQty} بكلفة ${oldCostSyp.toFixed(0)} وعم تضيف ${added} بكلفة ${typedSyp.toFixed(0)} — المتوسط المرجّح هو الأدق.`;
+    } else if (added > 0 && oldQty <= 0) {
+      weightedNote = 'المخزون كان صفر - سعر الشراء الجديد هو الصح بدون متوسط.';
+    } else if (added <= 0) {
+      weightedNote = 'زوّد الكمية فوق (بمقدار الوارد الجديد) حتى يظهر خيار المتوسط المرجّح.';
+    }
+  }
+
   if (typedSyp > 0) {
     const avgSyp = (lastSyp + typedSyp) / 2;
-    opts.push(`<option value="${toField(avgSyp)}">المتوسط (آخر شراء + المكتوب) ÷ 2: ${avgSyp.toFixed(0)} ل.س</option>`);
+    opts.push(`<option value="${toField(avgSyp)}">متوسط بسيط (آخر شراء + المكتوب) ÷ 2: ${avgSyp.toFixed(0)} ل.س</option>`);
   }
 
   sel.innerHTML = opts.join('');
-  hint.textContent = typedSyp > 0
-    ? 'اختار خيار وبينكتب بخانة سعر الشراء فوق.'
-    : 'اكتب سعر الشراء الجديد فوق حتى يظهر خيار المتوسط.';
+  hint.innerHTML = weightedNote
+    ? '<b style="color:var(--green);">' + weightedNote + '</b>'
+    : (typedSyp > 0
+        ? 'اختار خيار وبينكتب بخانة سعر الشراء فوق.'
+        : 'اكتب سعر الشراء الجديد فوق حتى تظهر خيارات المتوسط.');
 }
 
 $('#product-cost-suggest')?.addEventListener('change', (e) => {
@@ -2770,6 +2793,7 @@ $('#product-cost-suggest')?.addEventListener('change', (e) => {
 });
 
 $('#product-cost')?.addEventListener('input', refreshCostSuggestions);
+$('#product-qty')?.addEventListener('input', refreshCostSuggestions);
 $('#product-currency')?.addEventListener('change', refreshCostSuggestions);
 
 $('#product-sell')?.addEventListener('input', () => syncSellBoxes('syp'));
