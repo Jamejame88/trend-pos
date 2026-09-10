@@ -435,7 +435,11 @@
         <h2>➕ إضافة منتج جديد</h2>
         <form id="product-form">
           <div class="form-grid">
-            <div class="field"><label>اسم المنتج *</label><input type="text" id="product-name" required></div>
+            <div class="field">
+              <label>اسم المنتج *</label>
+              <input type="text" id="product-name" required autocomplete="off">
+              <div id="product-name-suggest" style="font-size:11.5px; color:var(--orange); margin-top:4px;"></div>
+            </div>
             <div class="field"><label>التصنيف</label><input type="text" id="product-category"></div>
             <div class="field"><label>الباركود</label>
               <div class="input-with-scan">
@@ -2774,6 +2778,8 @@ $('#product-currency')?.addEventListener('change', () => syncSellBoxes(null));
 
 function fillProductForm(p) {
   editingProductId = p ? p.id : null;
+  const sg = $('#product-name-suggest');
+  if (sg) sg.innerHTML = '';
   $('#product-name').value = p ? p.name : '';
   $('#product-category').value = p ? (p.category || '') : '';
   $('#product-barcode').value = p ? (p.barcode || '') : '';
@@ -2789,6 +2795,45 @@ function fillProductForm(p) {
   syncSellBoxes(null);
   refreshCostSuggestions();
 }
+
+// اقتراح أصناف مشابهة وقت كتابة اسم منتج جديد - بيمنع تكرار نفس الصنف
+// باسم مكتوب شوي مختلف (وهي أكتر مشكلة بتخرب المخزون).
+let nameSuggestTimer = null;
+
+function renderNameSuggestions() {
+  const box = $('#product-name-suggest');
+  if (!box) return;
+  const typed = ($('#product-name').value || '').trim();
+  // وقت تعديل منتج موجود ما في داعي للاقتراح
+  if (editingProductId || typed.length < 2) { box.innerHTML = ''; return; }
+
+  const matches = findSimilarProducts(typed);
+  if (!matches.length) { box.innerHTML = ''; return; }
+
+  box.innerHTML =
+    '<div style="margin-bottom:3px;">⚠ في أصناف مشابهة موجودة - اضغط على وحدة لتعدّلها بدل ما تنشئ صنف مكرر:</div>' +
+    matches.map(m => `<div class="inv-suggest-item name-suggest-item" data-id="${escapeAttr(m.product.id)}">
+        ${escapeHtml(m.product.name)}
+        <span style="color:var(--muted);">${m.product.category ? '- ' + escapeHtml(m.product.category) : ''}
+        · متوفر: ${m.product.quantity} · ${productSell(m.product).toFixed(0)}</span>
+      </div>`).join('');
+}
+
+$('#product-name').addEventListener('input', () => {
+  clearTimeout(nameSuggestTimer);
+  nameSuggestTimer = setTimeout(renderNameSuggestions, 300);
+});
+
+$('#product-name-suggest').addEventListener('click', (e) => {
+  const item = e.target.closest('.name-suggest-item');
+  if (!item) return;
+  const prod = productsCache.find(x => x.id === item.dataset.id);
+  if (!prod) return;
+  if (!confirm(`تفتح "${prod.name}" للتعديل بدل ما تنشئ صنف جديد؟\n(يلي كتبته بالنموذج رح ينمسح)`)) return;
+  fillProductForm(prod);
+  $('#product-name-suggest').innerHTML = '';
+  $('#product-name').scrollIntoView({ behavior: 'smooth', block: 'center' });
+});
 
 $('#product-form-reset').addEventListener('click', () => fillProductForm(null));
 
