@@ -2421,8 +2421,12 @@ $('#admin-products-list').addEventListener('click', async (e) => {
 });
 
 // ---------------- رفع صورة/صور منتج مباشرة لموقع TREND ----------------
-const IMG_MAX_SIDE = 800;
-const IMG_QUALITY = 0.82;
+// حجم الصورة المرفوعة للموقع. بطاقة المنتج بالموقع عرضها ~190 بكسل،
+// و440 بتغطي الشاشات عالية الدقة (2x) بأمان. النزول من 800 لـ440
+// بيصغّر كل صورة لحوالي ثلث حجمها بدون فرق يشوفه الزبون.
+// لو بدك جودة أعلى لصور معيّنة، ارفع الرقم مؤقتًا وأعد رفعها.
+const IMG_MAX_SIDE = 440;
+const IMG_QUALITY = 0.78;
 let pendingImageProduct = null;
 
 function shrinkImageFile(file) {
