@@ -432,6 +432,40 @@
         </div>
       </div>
       <div class="card">
+        <h2>📥 استلام بضاعة (وارد جديد)</h2>
+        <p style="font-size:13px; color:var(--muted); margin-top:0;">
+          اكتب اسم الصنف واختاره من المطابقات، بعدين حط عدد القطع الواردة وسعر شرائها.
+          النظام بيزيد الكمية ويحسب <b>كلفة المخزون الجديدة بالمتوسط المرجّح</b> تلقائيًا،
+          وبيسجّل العملية بفواتير التوريد.
+        </p>
+        <div class="field">
+          <label>اسم الصنف</label>
+          <input type="text" id="recv-search" placeholder="اكتب جزء من الاسم..." autocomplete="off">
+          <div id="recv-matches" style="font-size:12px; margin-top:5px;"></div>
+        </div>
+
+        <div id="recv-panel" style="display:none; border:1px solid var(--border); border-radius:10px; padding:12px; margin-top:8px;">
+          <div style="font-weight:bold; margin-bottom:8px;" id="recv-name"></div>
+          <div class="form-grid" style="margin-bottom:8px;">
+            <div>الكمية الحالية: <strong id="recv-old-qty">0</strong></div>
+            <div>الكلفة الحالية: <strong id="recv-old-cost">0</strong></div>
+          </div>
+          <div class="form-grid">
+            <div class="field"><label>عدد القطع الواردة *</label>
+              <input type="number" id="recv-qty" min="1" step="1" placeholder="مثلاً 12"></div>
+            <div class="field"><label>سعر شراء القطعة *<span id="recv-cur-lbl"></span></label>
+              <input type="number" id="recv-cost" min="0" step="any" placeholder="سعر القطعة الوحدة"></div>
+          </div>
+          <div id="recv-preview" style="display:none; background:#f0f8f2; border:1px solid #b5dcc0; border-radius:8px; padding:10px; margin-top:6px; font-size:13px; line-height:2;"></div>
+          <div style="margin-top:10px;">
+            <button type="button" class="btn" id="recv-apply-btn">✔ أضف للمخزون</button>
+            <button type="button" class="btn secondary" id="recv-cancel-btn">إلغاء</button>
+            <span id="recv-status" style="font-size:12px; margin-right:8px;"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
         <h2>➕ إضافة منتج جديد</h2>
         <form id="product-form">
           <div class="form-grid">
@@ -549,9 +583,18 @@
           </div>
           <button type="button" class="btn secondary tiny" id="invoice-add-row-btn" style="margin-top:8px;">+ إضافة سطر</button>
           <div style="margin-top:10px; font-size:13px;">
-            <label style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
-              <input type="checkbox" id="invoice-update-cost" checked> تحديث سعر الشراء للمنتجات الموجودة أصلاً
-            </label>
+            <div style="margin-bottom:8px;">
+              <label style="display:block; margin-bottom:4px;">سعر الشراء للمنتجات الموجودة أصلاً:</label>
+              <select id="invoice-cost-mode" style="width:100%; padding:7px; border-radius:8px; border:1px solid var(--border);">
+                <option value="weighted" selected>✔ المتوسط المرجّح حسب الكميات (الأدق)</option>
+                <option value="replace">استبدله بسعر هاي الفاتورة</option>
+                <option value="keep">لا تغيّره</option>
+              </select>
+              <div style="font-size:11.5px; color:var(--muted); margin-top:4px;">
+                المتوسط المرجّح = (الكمية القديمة × كلفتها + الكمية الواردة × كلفتها) ÷ المجموع.
+                بيمنع إنه كلفة كل مخزونك تتغيّر بسبب فاتورة صغيرة.
+              </div>
+            </div>
             <label style="display:flex; align-items:center; gap:6px;">
               <input type="checkbox" id="invoice-update-sell"> تحديث سعر البيع للمنتجات الموجودة أصلاً
             </label>
@@ -2820,6 +2863,147 @@ function fillProductForm(p) {
   refreshCostSuggestions();
 }
 
+// ================= استلام بضاعة (وارد جديد) =================
+// بيطابق الصنف بالاسم، وبيحسب كلفة المخزون الجديدة بالمتوسط المرجّح:
+// (كمية قديمة × كلفتها + كمية واردة × كلفتها) ÷ المجموع
+let recvProduct = null, recvTimer = null;
+
+function renderRecvMatches() {
+  const box = $('#recv-matches');
+  const q = ($('#recv-search').value || '').trim();
+  if (!box) return;
+  if (q.length < 2) { box.innerHTML = ''; return; }
+  const norm = normalizeProductName(q);
+  const exact = productsCache.filter(p => normalizeProductName(p.name).includes(norm)).slice(0, 8);
+  const similar = findSimilarProducts(q).map(m => m.product)
+    .filter(p => !exact.some(x => x.id === p.id)).slice(0, 4);
+  const list = exact.concat(similar);
+  if (!list.length) {
+    box.innerHTML = '<span style="color:var(--muted);">ما في صنف بهاد الاسم - استخدم "إضافة منتج جديد" تحت.</span>';
+    return;
+  }
+  box.innerHTML = list.map(p => `<div class="inv-suggest-item recv-pick" data-id="${escapeAttr(p.id)}">
+      ${escapeHtml(p.name)} <span style="color:var(--muted);">· متوفر ${p.quantity} · كلفة ${productCost(p).toFixed(0)}</span>
+    </div>`).join('');
+}
+
+$('#recv-search')?.addEventListener('input', () => {
+  clearTimeout(recvTimer);
+  recvTimer = setTimeout(renderRecvMatches, 250);
+});
+
+$('#recv-matches')?.addEventListener('click', (e) => {
+  const item = e.target.closest('.recv-pick');
+  if (!item) return;
+  recvProduct = productsCache.find(x => x.id === item.dataset.id);
+  if (!recvProduct) return;
+  const isUsd = recvProduct.price_currency === 'usd';
+  $('#recv-name').textContent = recvProduct.name;
+  $('#recv-old-qty').textContent = recvProduct.quantity;
+  $('#recv-old-cost').textContent = productCost(recvProduct).toFixed(0) + ' ل.س' +
+    (isUsd ? ` ($${Number(recvProduct.cost_price).toFixed(2)})` : '');
+  $('#recv-cur-lbl').textContent = isUsd ? ' (بالدولار)' : ' (بالليرة)';
+  $('#recv-qty').value = ''; $('#recv-cost').value = '';
+  $('#recv-preview').style.display = 'none';
+  $('#recv-status').textContent = '';
+  $('#recv-panel').style.display = 'block';
+  $('#recv-matches').innerHTML = '';
+  $('#recv-qty').focus();
+});
+
+function recvCompute() {
+  if (!recvProduct) return null;
+  const addQty = parseInt($('#recv-qty').value, 10);
+  const unit = parseFloat($('#recv-cost').value);
+  if (!(addQty > 0) || !(unit >= 0)) return null;
+  const rate = Number(CURRENT_USD_RATE) || 0;
+  const isUsd = recvProduct.price_currency === 'usd';
+  const unitSyp = isUsd && rate > 0 ? unit * rate : unit;
+  const oldQty = Number(recvProduct.quantity) || 0;
+  const oldCostSyp = productCost(recvProduct);
+  const newQty = oldQty + addQty;
+  // لو المخزون كان صفر أو سالب، الكلفة الجديدة هي كلفة الوارد بدون متوسط
+  const newCostSyp = oldQty > 0 ? ((oldQty * oldCostSyp) + (addQty * unitSyp)) / newQty : unitSyp;
+  const newCostRaw = (isUsd && rate > 0) ? newCostSyp / rate : newCostSyp;
+  return { addQty, unit, unitSyp, oldQty, oldCostSyp, newQty, newCostSyp, newCostRaw, isUsd };
+}
+
+function renderRecvPreview() {
+  const box = $('#recv-preview');
+  const c = recvCompute();
+  if (!c) { box.style.display = 'none'; return; }
+  const dir = c.newCostSyp > c.oldCostSyp ? '▲ ارتفعت' : (c.newCostSyp < c.oldCostSyp ? '▼ نزلت' : '= ما تغيّرت');
+  box.innerHTML =
+    `الكمية: <b>${c.oldQty}</b> + ${c.addQty} = <b style="color:var(--green);">${c.newQty}</b><br>` +
+    `الكلفة: <b>${c.oldCostSyp.toFixed(0)}</b> ← <b style="color:var(--green);">${c.newCostSyp.toFixed(0)}</b> ل.س ` +
+    `<span style="color:var(--muted);">(${dir})</span><br>` +
+    `<span style="color:var(--muted); font-size:11.5px;">المتوسط المرجّح: (${c.oldQty}×${c.oldCostSyp.toFixed(0)} + ${c.addQty}×${c.unitSyp.toFixed(0)}) ÷ ${c.newQty}</span><br>` +
+    `<span style="color:var(--muted); font-size:11.5px;">إجمالي الفاتورة: ${(c.addQty * c.unitSyp).toFixed(0)} ل.س</span>`;
+  box.style.display = 'block';
+}
+
+$('#recv-qty')?.addEventListener('input', renderRecvPreview);
+$('#recv-cost')?.addEventListener('input', renderRecvPreview);
+
+$('#recv-cancel-btn')?.addEventListener('click', () => {
+  recvProduct = null;
+  $('#recv-panel').style.display = 'none';
+  $('#recv-search').value = '';
+  $('#recv-matches').innerHTML = '';
+});
+
+$('#recv-apply-btn')?.addEventListener('click', async () => {
+  const c = recvCompute();
+  const statusEl = $('#recv-status');
+  if (!c) { statusEl.textContent = '⚠ حط عدد القطع وسعر الشراء'; statusEl.style.color = 'var(--red)'; return; }
+  if (!confirm(`إضافة ${c.addQty} قطعة لـ"${recvProduct.name}"؟\nالكمية بتصير ${c.newQty} والكلفة ${c.newCostSyp.toFixed(0)} ل.س`)) return;
+
+  $('#recv-apply-btn').disabled = true;
+  statusEl.style.color = 'var(--muted)';
+  statusEl.textContent = '⏳ عم يحفظ...';
+  try {
+    const { error } = await supabase.from('products')
+      .update({ quantity: c.newQty, cost_price: c.newCostRaw }).eq('id', recvProduct.id);
+    if (error) throw error;
+
+    // تسجيل العملية بفواتير التوريد حتى يتحدث "آخر سعر شراء" ويضل في سجل
+    try {
+      const { data: inv } = await supabase.from('purchase_invoices').insert({
+        branch_id: activeBranchId,
+        total_cost: c.addQty * c.unitSyp,
+        created_by: currentProfile ? currentProfile.id : null,
+      }).select().single();
+      if (inv) {
+        await supabase.from('purchase_invoice_items').insert({
+          invoice_id: inv.id, product_id: recvProduct.id, product_name: recvProduct.name,
+          category: recvProduct.category || null, quantity: c.addQty,
+          cost_price: c.unit, sell_price: recvProduct.sell_price,
+          price_currency: recvProduct.price_currency || 'syp',
+        });
+      }
+    } catch (e) { console.error('تعذر تسجيل فاتورة التوريد:', e); }
+
+    await supabase.from('activity_log').insert({
+      branch_id: activeBranchId, action_type: 'stock_received',
+      description: `استلام وارد: ${recvProduct.name} (${c.addQty} قطعة) - الكلفة ${c.oldCostSyp.toFixed(0)} ← ${c.newCostSyp.toFixed(0)}`,
+      amount: c.addQty * c.unitSyp, performed_by: currentProfile ? currentProfile.id : null,
+    });
+
+    statusEl.style.color = 'var(--green)';
+    statusEl.textContent = `✅ تمت الإضافة - الكمية ${c.newQty} والكلفة ${c.newCostSyp.toFixed(0)}`;
+    recvProduct = null;
+    $('#recv-panel').style.display = 'none';
+    $('#recv-search').value = '';
+    await loadProducts();
+    if (currentProfile.role === 'owner') await loadPurchaseInvoices();
+  } catch (err) {
+    statusEl.style.color = 'var(--red)';
+    statusEl.textContent = '❌ ' + err.message;
+  } finally {
+    $('#recv-apply-btn').disabled = false;
+  }
+});
+
 // اقتراح أصناف مشابهة وقت كتابة اسم منتج جديد - بيمنع تكرار نفس الصنف
 // باسم مكتوب شوي مختلف (وهي أكتر مشكلة بتخرب المخزون).
 let nameSuggestTimer = null;
@@ -4858,6 +5042,7 @@ function actionLabel(t) {
     supplier_return: 'مرتجع للمورد',
     debt_payment: 'دفعة دين',
     cash_reconcile: 'مطابقة صندوق',
+    stock_received: 'استلام وارد',
     sale_discount_edited: 'تعديل خصم فاتورة',
   }[t] || t;
 }
@@ -5255,7 +5440,8 @@ $('#invoice-commit-btn').addEventListener('click', async () => {
   const statusEl = $('#invoice-status');
   if (!validItems.length) { statusEl.textContent = '⚠ ما في أسطر صالحة للحفظ (لازم اسم وكمية أكبر من صفر)'; return; }
 
-  const updateCost = $('#invoice-update-cost').checked;
+  const costMode = ($('#invoice-cost-mode') || {}).value || 'weighted';
+  const updateCost = costMode !== 'keep';
   const updateSell = $('#invoice-update-sell').checked;
   // وضع "تعليم مستمر" (دولار): الأرقام يلي بجدول المراجعة أصلًا بالدولار - لازم نحط price_currency:'usd'
   // على المنتج (جديد أو موجود) حتى ينعرض/يتحدث صح حسب سعر الصرف المركزي، مش يتعامل معه كأنه ليرة.
@@ -5279,8 +5465,23 @@ $('#invoice-commit-btn').addEventListener('click', async () => {
       let productId = null;
       if (existing) {
         productId = existing.id;
-        const updateFields = { quantity: Number(existing.quantity || 0) + Number(it.qty) };
-        if (updateCost) updateFields.cost_price = it.cost;
+        const oldQty = Number(existing.quantity || 0);
+        const addQty = Number(it.qty) || 0;
+        const updateFields = { quantity: oldQty + addQty };
+
+        if (updateCost) {
+          if (costMode === 'weighted' && oldQty > 0) {
+            // الحساب بالليرة ثم الرجوع لعملة المنتج - عشان ما ينكسر الربط بسعر الصرف
+            const rate = Number(CURRENT_USD_RATE) || 0;
+            const willBeUsd = tagAsUsd || existing.price_currency === 'usd';
+            const oldCostSyp = productCost(existing);
+            const newCostSyp = (tagAsUsd && rate > 0) ? Number(it.cost) * rate : Number(it.cost);
+            const wAvgSyp = ((oldQty * oldCostSyp) + (addQty * newCostSyp)) / (oldQty + addQty);
+            updateFields.cost_price = (willBeUsd && rate > 0) ? wAvgSyp / rate : wAvgSyp;
+          } else {
+            updateFields.cost_price = it.cost;   // مخزون صفر أو وضع "استبدال"
+          }
+        }
         if (updateSell) updateFields.sell_price = it.sell;
         if (tagAsUsd && (updateCost || updateSell)) updateFields.price_currency = 'usd';
         const { error } = await supabase.from('products').update(updateFields).eq('id', existing.id);
