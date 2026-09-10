@@ -394,7 +394,10 @@
             <tbody id="today-sold-items-list"></tbody>
           </table>
         </div>
-        <div class="totals-row big"><span>إجمالي مبيعات اليوم</span><span id="today-sold-items-total">0</span></div>
+        <div class="totals-row" id="today-discount-line" style="display:none; color:var(--orange);">
+          <span>خصومات اليوم</span><span id="today-discount-value">0</span>
+        </div>
+        <div class="totals-row big"><span>صافي مبيعات اليوم (بعد الخصم)</span><span id="today-sold-items-total">0</span></div>
       </div>
 
       <div class="card">
@@ -570,9 +573,17 @@
     <section id="tab-history" class="tab-panel">
       <div class="card">
         <h2>آخر 100 فاتورة (الفرع الحالي)</h2>
+        <p style="font-size:12px; color:var(--muted); margin-top:0;">
+          كل فواتير الموظفين بترتيب زمني (الأحدث أول). اضغط على أي سطر لتشوف أصنافها.
+          الفواتير يلي عليها خصم بتطلع بخلفية مميّزة.
+        </p>
+        <div class="form-grid" style="margin-bottom:10px;">
+          <div>مجموع الفواتير المعروضة: <strong id="hist-total">0</strong></div>
+          <div>إجمالي الخصومات: <strong id="hist-discount" style="color:var(--orange);">0</strong></div>
+        </div>
         <div style="overflow-x:auto;">
           <table>
-            <thead><tr><th>رقم الفاتورة</th><th>التاريخ</th><th>الإجمالي</th><th>المدفوع</th><th>الحالة</th><th></th></tr></thead>
+            <thead><tr><th>رقم الفاتورة</th><th>التاريخ</th><th>الموظف</th><th>المجموع</th><th>الخصم</th><th>الإجمالي</th><th>المدفوع</th><th>الحالة</th><th></th></tr></thead>
             <tbody id="sales-history-list"></tbody>
           </table>
         </div>
@@ -914,6 +925,7 @@
             <div>عدد الفواتير: <strong id="daily-invoice-count">0</strong></div>
             <div>إجمالي المبيعات (بعد خصم المرتجعات): <strong id="daily-total-sales">0</strong></div>
             <div>قيمة مرتجعات الزباين اليوم: <strong id="daily-returns-value">0</strong></div>
+            <div>خصومات اليوم: <strong id="daily-discounts" style="color:var(--orange);">0</strong></div>
             <div>إجمالي التكلفة (تقديري، بعد خصم المرتجعات): <strong id="daily-total-cost">0</strong></div>
             <div>الربح (هامش البيع): <strong id="daily-gross-profit">0</strong></div>
             <div>مصاريف اليوم: <strong id="daily-expenses">0</strong></div>
@@ -1356,13 +1368,27 @@ async function loadTodaySoldItems() {
 
   // ترتيب زمني من الأقدم للأحدث (مش تجميع حسب المنتج) - كل سطر عملية بيع لحالها بوقتها
   const rows = (itemRows || []).slice().sort((a, b) => new Date(a.sales.sale_date) - new Date(b.sales.sale_date));
-  const grandTotal = rows.reduce((s, it) => s + Number(it.subtotal), 0);
+  // مجموع الأصناف = قبل الخصم. لازم ننزّل خصومات فواتير اليوم عشان الرقم
+  // يطابق المقبوض فعليًا (وياخد نفس منطق التقرير اليومي).
+  const itemsSum = rows.reduce((s, it) => s + Number(it.subtotal), 0);
+  const { data: todaySales } = await supabase
+    .from('sales').select('discount')
+    .eq('branch_id', activeBranchId).eq('status', 'completed')
+    .gte('sale_date', startISO).lt('sale_date', endISO);
+  const todayDiscount = (todaySales || []).reduce((s, r) => s + (Number(r.discount) || 0), 0);
+  const grandTotal = itemsSum - todayDiscount;
 
   $('#today-sold-items-list').innerHTML = rows.map((it) => {
     const timeStr = new Date(it.sales.sale_date).toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit' });
     return `<tr><td>${escapeHtml(it.product_name)}</td><td>${Number(it.quantity)}</td><td>${Number(it.subtotal).toFixed(0)}</td><td>${timeStr}</td></tr>`;
   }).join('') || '<tr><td colspan="4">لسا ما في مبيعات اليوم</td></tr>';
   $('#today-sold-items-total').textContent = grandTotal.toFixed(0);
+  const dEl = $('#today-discount-line');
+  if (dEl) {
+    dEl.style.display = todayDiscount > 0 ? 'flex' : 'none';
+    const v = $('#today-discount-value');
+    if (v) v.textContent = '-' + todayDiscount.toFixed(0);
+  }
 }
 
 // ---------------- سعر صرف الدولار (ربط مستمر: أي منتج متسعّر بالدولار بيتحوّل لليرة تلقائيًا حسب هاد السعر) ----------------
@@ -2767,24 +2793,120 @@ async function loadSalesHistory() {
     .order('sale_date', { ascending: false })
     .limit(100);
   if (error) { console.error(error); return; }
-  $('#sales-history-list').innerHTML = (data || []).map(s => `
-    <tr class="${s.status === 'cancelled' ? 'cancelled-row' : ''}">
-      <td dir="ltr" style="font-weight:bold; color:var(--muted);">${escapeHtml(formatInvoiceNo(s.invoice_no) || '-')}</td>
-      <td>${new Date(s.sale_date).toLocaleString('ar')}</td>
-      <td>${Number(s.total).toFixed(0)}</td>
-      <td>${Number(s.paid).toFixed(0)}</td>
-      <td>${s.status === 'cancelled' ? 'ملغاة ❌' : 'مكتملة'}</td>
-      <td>
-        ${s.status !== 'cancelled' ? `<button class="btn tiny danger cancel-sale" data-id="${s.id}">إلغاء</button>` : ''}
-        <button class="btn tiny secondary print-sale" data-id="${s.id}">🖨 طباعة</button>
-      </td>
-    </tr>
-  `).join('') || '<tr><td colspan="6">لا يوجد فواتير</td></tr>';
+  salesHistoryCache = data || [];
+  renderSalesHistory();
+}
+
+let salesHistoryCache = [];
+let expandedSaleId = null;
+let expandedSaleItems = [];
+
+function cashierName(id) {
+  const e = (employeesCache || []).find(x => x.id === id);
+  return e ? (e.full_name || e.username) : '-';
+}
+
+function renderSalesHistory() {
+  const rows = salesHistoryCache;
+  let sumTotal = 0, sumDisc = 0;
+  rows.forEach(s => {
+    if (s.status === 'cancelled') return;
+    sumTotal += Number(s.total) || 0;
+    sumDisc += Number(s.discount) || 0;
+  });
+  $('#hist-total').textContent = sumTotal.toFixed(0);
+  $('#hist-discount').textContent = sumDisc.toFixed(0);
+
+  $('#sales-history-list').innerHTML = rows.map(s => {
+    const disc = Number(s.discount) || 0;
+    const open = s.id === expandedSaleId;
+    const cancelled = s.status === 'cancelled';
+    const main = `
+      <tr class="sale-row${cancelled ? ' cancelled-row' : ''}" data-id="${s.id}"
+          style="cursor:pointer;${disc > 0 && !cancelled ? 'background:#fffaf0;' : ''}">
+        <td dir="ltr" style="font-weight:bold; color:var(--muted);">${escapeHtml(formatInvoiceNo(s.invoice_no) || '-')}</td>
+        <td>${new Date(s.sale_date).toLocaleString('ar')}</td>
+        <td>${escapeHtml(cashierName(s.sold_by))}</td>
+        <td>${Number(s.subtotal || 0).toFixed(0)}</td>
+        <td style="color:${disc > 0 ? 'var(--orange)' : 'var(--muted)'}; font-weight:${disc > 0 ? 'bold' : 'normal'};">
+          ${disc > 0 ? '-' + disc.toFixed(0) : '-'}</td>
+        <td style="font-weight:bold;">${Number(s.total).toFixed(0)}</td>
+        <td>${Number(s.paid).toFixed(0)}</td>
+        <td>${cancelled ? 'ملغاة ❌' : 'مكتملة'}</td>
+        <td>
+          ${!cancelled ? `<button class="btn tiny secondary edit-discount" data-id="${s.id}">✏ الخصم</button>` : ''}
+          ${!cancelled ? `<button class="btn tiny danger cancel-sale" data-id="${s.id}">إلغاء</button>` : ''}
+          <button class="btn tiny secondary print-sale" data-id="${s.id}">🖨</button>
+        </td>
+      </tr>`;
+    if (!open) return main;
+    const itemsHtml = expandedSaleItems.length
+      ? expandedSaleItems.map(it => `<tr>
+          <td>${escapeHtml(it.product_name)}</td>
+          <td>${Number(it.quantity)}</td>
+          <td>${Number(it.unit_price).toFixed(0)}</td>
+          <td>${Number(it.subtotal).toFixed(0)}</td></tr>`).join('')
+      : '<tr><td colspan="4">جارٍ التحميل...</td></tr>';
+    return main + `
+      <tr><td colspan="9" style="background:rgba(0,0,0,.02);">
+        <div style="padding:6px 4px;">
+          <div style="font-size:12px; color:var(--muted); margin-bottom:6px;">
+            أصناف الفاتورة${s.customer_phone ? ' · رقم الزبون: <b dir="ltr">' + escapeHtml(s.customer_phone) + '</b>' : ''}
+          </div>
+          <div style="overflow-x:auto;">
+            <table>
+              <thead><tr><th>الصنف</th><th>الكمية</th><th>السعر</th><th>المجموع</th></tr></thead>
+              <tbody>${itemsHtml}</tbody>
+            </table>
+          </div>
+        </div>
+      </td></tr>`;
+  }).join('') || '<tr><td colspan="9">لا يوجد فواتير</td></tr>';
 }
 
 $('#sales-history-list').addEventListener('click', async (e) => {
   const printBtn = e.target.closest('.print-sale');
   if (printBtn) { await printSaleById(printBtn.dataset.id); return; }
+
+  // تعديل الخصم: بيعيد حساب الإجمالي تلقائيًا (المجموع - الخصم الجديد)
+  const discBtn = e.target.closest('.edit-discount');
+  if (discBtn) {
+    const sale = salesHistoryCache.find(x => x.id === discBtn.dataset.id);
+    if (!sale) return;
+    const sub = Number(sale.subtotal) || 0;
+    const input = prompt(`فاتورة ${formatInvoiceNo(sale.invoice_no)}\nالمجموع قبل الخصم: ${sub.toFixed(0)}\n\nاكتب قيمة الخصم الجديدة:`, Number(sale.discount) || 0);
+    if (input === null) return;
+    const newDisc = Math.max(0, parseFloat(input) || 0);
+    if (newDisc > sub) { alert('الخصم ما بيصير يكون أكبر من المجموع'); return; }
+    const newTotal = sub - newDisc;
+    const { error } = await supabase.from('sales')
+      .update({ discount: newDisc, total: newTotal }).eq('id', sale.id);
+    if (error) { alert('خطأ بالتعديل: ' + error.message); return; }
+    await supabase.from('activity_log').insert({
+      branch_id: activeBranchId, action_type: 'sale_discount_edited',
+      description: `تعديل خصم فاتورة ${formatInvoiceNo(sale.invoice_no)}: ${Number(sale.discount || 0).toFixed(0)} ← ${newDisc.toFixed(0)}`,
+      amount: newDisc, performed_by: currentProfile ? currentProfile.id : null,
+    });
+    alert('تم التعديل ✅ - الإجمالي صار ' + newTotal.toFixed(0));
+    await loadSalesHistory();
+    await loadTodaySoldItems();
+    if (reportUnlocked) await loadDailyReport();
+    return;
+  }
+
+  // ضغطة على السطر: فتح/إغلاق تفاصيل الأصناف
+  const row = e.target.closest('.sale-row');
+  if (row && !e.target.closest('button')) {
+    const id = row.dataset.id;
+    if (expandedSaleId === id) { expandedSaleId = null; expandedSaleItems = []; renderSalesHistory(); return; }
+    expandedSaleId = id; expandedSaleItems = [];
+    renderSalesHistory();
+    const { data: items } = await supabase.from('sale_items').select('*').eq('sale_id', id);
+    expandedSaleItems = items || [];
+    renderSalesHistory();
+    return;
+  }
+
   const btn = e.target.closest('.cancel-sale');
   if (!btn) return;
   if (!confirm('متأكد تريد إلغاء هاي الفاتورة؟ رح ترجع الكمية للمخزون تلقائيًا، ولا يمكن التراجع.')) return;
@@ -4228,7 +4350,7 @@ async function loadDailyReport() {
   // فواتير اليوم المكتملة (الفرع الحالي)
   const { data: salesRows, error: salesErr } = await supabase
     .from('sales')
-    .select('id, total, sold_by, sale_date')
+    .select('id, total, discount, sold_by, sale_date')
     .eq('branch_id', activeBranchId)
     .eq('status', 'completed')
     .gte('sale_date', startISO)
@@ -4236,7 +4358,10 @@ async function loadDailyReport() {
   if (salesErr) { console.error(salesErr); return; }
 
   const invoiceCount = (salesRows || []).length;
+  // total محسوب أصلًا بعد الخصم - منعرض مجموع الخصومات للعلم بس
   const rawTotalSales = (salesRows || []).reduce((s, r) => s + Number(r.total), 0);
+  const dayDiscounts = (salesRows || []).reduce((s, r) => s + (Number(r.discount) || 0), 0);
+  if ($('#daily-discounts')) $('#daily-discounts').textContent = dayDiscounts.toFixed(0);
 
   // مرتجعات الزباين بهاد اليوم - لازم تتنزل من صافي المبيعات والتكلفة والأرباح
   const { data: returnRows, error: retErr } = await supabase
