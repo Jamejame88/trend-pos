@@ -641,6 +641,35 @@
       </div>
 
       <div class="card">
+        <h2>🎯 عروض المكياج اليومية</h2>
+        <p style="font-size:13px; color:var(--muted); margin-top:0;">
+          بيختار 5 أصناف من قسم المكياج (بالأولوية للأصناف الواقفة من زمان)، ويحسب سعر العرض =
+          <b>الكلفة + <span id="offer-margin-lbl">15</span>٪</b> مقرّب لأقرب 10.
+          بينشرهم على الموقع مكان عروض أمس (استبدال كامل).
+          <b>ما بينشر إلا يلي عندو صورة</b>، ولا بيعيد صنف نزل بآخر 14 يوم.
+        </p>
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+          <label>نسبة الربح:</label>
+          <input type="number" id="offer-margin" value="15" min="0" step="1" style="width:70px; padding:7px; border-radius:8px; border:1px solid var(--border);">
+          <span style="font-size:12px; color:var(--muted);">٪</span>
+          <label style="margin-inline-start:10px;">العدد:</label>
+          <input type="number" id="offer-count" value="5" min="1" max="12" style="width:60px; padding:7px; border-radius:8px; border:1px solid var(--border);">
+          <button type="button" class="btn secondary" id="offer-pick-btn">🎲 اختار الأصناف</button>
+        </div>
+        <div id="offer-wrap" style="display:none;">
+          <div style="overflow-x:auto;">
+            <table>
+              <thead><tr><th>الصنف</th><th>الكلفة</th><th>سعرك الحالي</th><th>سعر العرض</th><th>آخر بيع</th><th></th></tr></thead>
+              <tbody id="offer-list"></tbody>
+            </table>
+          </div>
+          <button type="button" class="btn" id="offer-publish-btn" style="margin-top:10px;">🚀 انشر على الموقع</button>
+          <button type="button" class="btn secondary tiny" id="offer-clear-btn" style="margin-top:10px;">إلغاء</button>
+        </div>
+        <p id="offer-status" style="font-size:13px; margin-top:8px; white-space:pre-line;"></p>
+      </div>
+
+      <div class="card">
         <h2>🔄 مزامنة المنتجات مع موقع TREND</h2>
         <p style="font-size:13px; color:var(--muted); margin-top:0;">
           بترسل منتجات "<span id="sync-branch-name">-</span>" (الفرع الحالي) لموقع الويب: بتحدّث الاسم/القسم/السعر/التوفّر بس،
@@ -1441,6 +1470,189 @@ $('#move-products-btn').addEventListener('click', async () => {
 
   alert(`تم نقل ${count} منتج إلى "${toName}" بنجاح ✅`);
   await loadProducts();
+});
+
+// ================= عروض المكياج اليومية =================
+// بيختار أصناف من قسم المكياج، بالأولوية للأصناف الواقفة من زمان،
+// وبيحسب سعر العرض = الكلفة + النسبة، مقرّب لأقرب 10.
+// بينشر على ورقة "العروض" بالموقع (استبدال كامل لعروض أمس).
+const OFFER_HISTORY_KEY = 'trend_offer_history';   // آخر الأصناف المنشورة (14 يوم)
+const OFFER_COOLDOWN_DAYS = 14;
+const OFFER_CATEGORY = 'مكياج';
+let offerPicks = [];
+
+function loadOfferHistory() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(OFFER_HISTORY_KEY) || '[]');
+    const cut = Date.now() - OFFER_COOLDOWN_DAYS * 86400000;
+    return raw.filter(r => r && r.t > cut);
+  } catch (e) { return []; }
+}
+
+function saveOfferHistory(ids) {
+  const hist = loadOfferHistory().concat(ids.map(id => ({ id, t: Date.now() })));
+  try { localStorage.setItem(OFFER_HISTORY_KEY, JSON.stringify(hist)); } catch (e) {}
+}
+
+// سعر العرض = الكلفة + النسبة، مقرّب لأقرب 10 لفوق
+function offerPrice(costSyp, marginPct) {
+  const raw = Number(costSyp) * (1 + (Number(marginPct) || 0) / 100);
+  return Math.ceil(raw / 10) * 10;
+}
+
+$('#offer-margin')?.addEventListener('input', () => {
+  const l = $('#offer-margin-lbl');
+  if (l) l.textContent = $('#offer-margin').value || '0';
+});
+
+$('#offer-pick-btn')?.addEventListener('click', async () => {
+  const statusEl = $('#offer-status');
+  const margin = parseFloat($('#offer-margin').value) || 0;
+  const count = Math.max(1, parseInt($('#offer-count').value, 10) || 5);
+
+  statusEl.style.color = 'var(--muted)';
+  statusEl.textContent = '⏳ عم يجيب آخر مبيعات القسم...';
+
+  // آخر تاريخ بيع لكل صنف - لترتيب الأولوية للأصناف الواقفة
+  const since = new Date(Date.now() - 120 * 86400000).toISOString();
+  const { data: soldRows } = await supabase
+    .from('sale_items')
+    .select('product_id, sales!inner(branch_id, status, sale_date)')
+    .eq('sales.branch_id', activeBranchId)
+    .eq('sales.status', 'completed')
+    .gte('sales.sale_date', since);
+
+  const lastSold = {};
+  (soldRows || []).forEach(r => {
+    if (!r.product_id) return;
+    const t = new Date(r.sales.sale_date).getTime();
+    if (!lastSold[r.product_id] || t > lastSold[r.product_id]) lastSold[r.product_id] = t;
+  });
+
+  const recent = new Set(loadOfferHistory().map(h => h.id));
+  const skipped = { noImg: 0, noCost: 0, recent: 0 };
+
+  const pool = productsCache.filter(p => {
+    if ((p.category || '').trim() !== OFFER_CATEGORY) return false;
+    if (Number(p.quantity) <= 0) return false;
+    if (recent.has(p.id)) { skipped.recent++; return false; }
+    if (!p.has_web_image) { skipped.noImg++; return false; }   // بدون صورة = عرض ضعيف
+    if (!(productCost(p) > 0)) { skipped.noCost++; return false; }
+    return true;
+  });
+
+  if (!pool.length) {
+    statusEl.style.color = 'var(--red)';
+    statusEl.textContent = '⚠ ما في أصناف مؤهّلة.' +
+      (skipped.noImg ? `\n· ${skipped.noImg} صنف بدون صورة على الموقع` : '') +
+      (skipped.noCost ? `\n· ${skipped.noCost} صنف بدون سعر شراء مسجّل` : '') +
+      (skipped.recent ? `\n· ${skipped.recent} صنف نزل عرض بآخر ${OFFER_COOLDOWN_DAYS} يوم` : '');
+    $('#offer-wrap').style.display = 'none';
+    return;
+  }
+
+  // الأقدم بيعًا أولًا (يلي ما انباع أبدًا بياخد الأولوية القصوى)
+  pool.sort((a, b) => (lastSold[a.id] || 0) - (lastSold[b.id] || 0));
+  offerPicks = pool.slice(0, count).map(p => ({
+    id: p.id, name: p.name,
+    costSyp: productCost(p),
+    currentSyp: productSell(p),
+    offerSyp: offerPrice(productCost(p), margin),
+    lastSold: lastSold[p.id] || 0,
+  }));
+
+  renderOfferPicks();
+  statusEl.style.color = 'var(--muted)';
+  statusEl.textContent = `اخترنا ${offerPicks.length} من ${pool.length} صنف مؤهّل` +
+    (skipped.noImg ? ` · تجاهلنا ${skipped.noImg} بدون صورة` : '');
+});
+
+function renderOfferPicks() {
+  const fmtLast = (t) => {
+    if (!t) return '<span style="color:var(--red);">ما انباع أبدًا</span>';
+    const days = Math.round((Date.now() - t) / 86400000);
+    return days === 0 ? 'اليوم' : `قبل ${days} يوم`;
+  };
+  $('#offer-list').innerHTML = offerPicks.map((o, i) => `
+    <tr>
+      <td>${escapeHtml(o.name)}</td>
+      <td>${o.costSyp.toFixed(0)}</td>
+      <td style="color:var(--muted); text-decoration:line-through;">${o.currentSyp.toFixed(0)}</td>
+      <td style="color:var(--green); font-weight:bold;">${o.offerSyp.toFixed(0)}</td>
+      <td style="font-size:12px;">${fmtLast(o.lastSold)}</td>
+      <td><button class="btn tiny secondary offer-swap" data-i="${i}" title="بدّل هاد الصنف">🔄</button></td>
+    </tr>
+  `).join('');
+  $('#offer-wrap').style.display = 'block';
+}
+
+// تبديل صنف واحد بصنف تاني مؤهّل
+$('#offer-list')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('.offer-swap');
+  if (!btn) return;
+  const i = parseInt(btn.dataset.i, 10);
+  const margin = parseFloat($('#offer-margin').value) || 0;
+  const used = new Set(offerPicks.map(o => o.id));
+  const recent = new Set(loadOfferHistory().map(h => h.id));
+  const alt = productsCache.find(p =>
+    (p.category || '').trim() === OFFER_CATEGORY &&
+    Number(p.quantity) > 0 && p.has_web_image && productCost(p) > 0 &&
+    !used.has(p.id) && !recent.has(p.id));
+  if (!alt) { $('#offer-status').textContent = '⚠ ما في صنف بديل متاح'; return; }
+  offerPicks[i] = {
+    id: alt.id, name: alt.name,
+    costSyp: productCost(alt), currentSyp: productSell(alt),
+    offerSyp: offerPrice(productCost(alt), margin), lastSold: 0,
+  };
+  renderOfferPicks();
+});
+
+$('#offer-clear-btn')?.addEventListener('click', () => {
+  offerPicks = [];
+  $('#offer-wrap').style.display = 'none';
+  $('#offer-status').textContent = '';
+});
+
+$('#offer-publish-btn')?.addEventListener('click', async () => {
+  if (!offerPicks.length) return;
+  const statusEl = $('#offer-status');
+  if (!confirm(`نشر ${offerPicks.length} عرض على الموقع؟\nعروض أمس رح تنمسح وتنستبدل فيهن.`)) return;
+
+  $('#offer-publish-btn').disabled = true;
+  statusEl.style.color = 'var(--muted)';
+  statusEl.textContent = '⏳ عم ينشر...';
+  try {
+    const offers = offerPicks.map(o => ({
+      name: o.name,
+      priceOld: Math.round(o.currentSyp),
+      priceNew: Math.round(o.offerSyp),
+      note: 'عرض اليوم',
+      img: '',              // Apps Script بياخد الصورة من ورقة المنتجات بالاسم
+      cur: 'syp',
+    }));
+    const { data, error } = await supabase.functions.invoke('sync-products', {
+      body: { action: 'publishOffers', offers },
+    });
+    if (error) throw new Error(error.message);
+    if (!data || !data.ok) throw new Error((data && data.message) || 'فشل النشر');
+
+    saveOfferHistory(offerPicks.map(o => o.id));
+    await supabase.from('activity_log').insert({
+      branch_id: activeBranchId, action_type: 'offers_published',
+      description: `نشر ${offers.length} عرض يومي: ` + offers.map(o => o.name).join('، '),
+      amount: 0, performed_by: currentProfile ? currentProfile.id : null,
+    });
+
+    statusEl.style.color = 'var(--green)';
+    statusEl.textContent = `✅ تم نشر ${data.count || offers.length} عرض على الموقع`;
+    offerPicks = [];
+    $('#offer-wrap').style.display = 'none';
+  } catch (err) {
+    statusEl.style.color = 'var(--red)';
+    statusEl.textContent = '❌ ' + err.message;
+  } finally {
+    $('#offer-publish-btn').disabled = false;
+  }
 });
 
 // ---------------- مزامنة المنتجات مع موقع TREND ----------------
@@ -5543,6 +5755,7 @@ function actionLabel(t) {
     supplier_return: 'مرتجع للمورد',
     debt_payment: 'دفعة دين',
     cash_reconcile: 'مطابقة صندوق',
+    offers_published: 'نشر عروض يومية',
     wheel_spin: 'لفّة عجلة فاتورة',
     stock_received: 'استلام وارد',
     sale_discount_edited: 'تعديل خصم فاتورة',
