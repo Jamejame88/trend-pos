@@ -648,6 +648,14 @@
           بينشرهم على الموقع مكان عروض أمس (استبدال كامل).
           <b>ما بينشر إلا يلي عندو صورة</b>، ولا بيعيد صنف نزل بآخر 14 يوم.
         </p>
+        <div id="offer-live" style="display:none; margin-bottom:10px; padding:10px 12px; border:1px solid var(--green); border-radius:8px; background:#f0f8f2;">
+          <div style="font-size:13px; margin-bottom:6px;">
+            🎯 <b>في <span id="offer-live-count">0</span> عرض شغّال حاليًا</b>
+            <span style="color:var(--muted);">— شاشة البيع عم تبيعهم بسعر العرض</span>
+          </div>
+          <div id="offer-live-list" style="font-size:12px; color:var(--muted); line-height:1.9; margin-bottom:8px;"></div>
+          <button type="button" class="btn danger tiny" id="offer-stop-btn">⏹ أوقف العروض وارجع للأسعار العادية</button>
+        </div>
         <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
           <label>نسبة الربح:</label>
           <input type="number" id="offer-margin" value="15" min="0" step="1" style="width:70px; padding:7px; border-radius:8px; border:1px solid var(--border);">
@@ -1537,6 +1545,60 @@ $('#offer-margin')?.addEventListener('input', () => {
   if (l) l.textContent = $('#offer-margin').value || '0';
 });
 
+// شريط "العروض الشغّالة" - بيتحدث مع كل تحميل للمنتجات
+function renderLiveOffers() {
+  const box = $('#offer-live');
+  if (!box) return;
+  const ids = Object.keys(dailyOffersMap).filter(id => dailyOffersMap[id] > 0);
+  if (!ids.length) { box.style.display = 'none'; return; }
+  $('#offer-live-count').textContent = ids.length;
+  $('#offer-live-list').innerHTML = ids.map(id => {
+    const p = productsCache.find(x => x.id === id);
+    if (!p) return '';
+    return `• ${escapeHtml(p.name)}: <b style="color:var(--green);">${dailyOffersMap[id]}</b>
+      <span style="text-decoration:line-through;">${productSell(p).toFixed(0)}</span>`;
+  }).filter(Boolean).join('<br>');
+  box.style.display = 'block';
+}
+
+$('#offer-stop-btn')?.addEventListener('click', async () => {
+  const statusEl = $('#offer-status');
+  const n = Object.keys(dailyOffersMap).length;
+  if (!confirm(`إيقاف ${n} عرض؟\n\n· شاشة البيع بترجع للأسعار العادية فورًا\n· العروض بتنشال من الموقع كمان`)) return;
+
+  $('#offer-stop-btn').disabled = true;
+  statusEl.style.color = 'var(--muted)';
+  statusEl.textContent = '⏳ عم يوقف العروض...';
+  try {
+    // 1) شيلهم من نقطة البيع
+    const { error } = await supabase.from('daily_offers').delete().eq('branch_id', activeBranchId);
+    if (error) throw error;
+
+    // 2) شيلهم من الموقع كمان - منبعت عرض "فاضي" (سطر واحد مخفي) عشان
+    // publishOffers بترفض القائمة الفاضية، فهيك بتنمسح الورقة عمليًا
+    try {
+      await supabase.functions.invoke('sync-products', {
+        body: { action: 'publishOffers', offers: [{ name: '—', priceOld: '', priceNew: '', note: '', cur: 'syp' }] },
+      });
+    } catch (e) { console.error('تعذر مسح عروض الموقع:', e); }
+
+    await supabase.from('activity_log').insert({
+      branch_id: activeBranchId, action_type: 'offers_stopped',
+      description: `إيقاف ${n} عرض يومي - رجوع للأسعار العادية`,
+      amount: 0, performed_by: currentProfile ? currentProfile.id : null,
+    });
+
+    statusEl.style.color = 'var(--green)';
+    statusEl.textContent = '✅ انوقفت العروض - الأسعار رجعت طبيعية بشاشة البيع وبالموقع';
+    await loadProducts();
+  } catch (err) {
+    statusEl.style.color = 'var(--red)';
+    statusEl.textContent = '❌ ' + err.message;
+  } finally {
+    $('#offer-stop-btn').disabled = false;
+  }
+});
+
 $('#offer-pick-btn')?.addEventListener('click', async () => {
   const statusEl = $('#offer-status');
   const margin = parseFloat($('#offer-margin').value) || 0;
@@ -1668,6 +1730,16 @@ $('#offer-publish-btn')?.addEventListener('click', async () => {
     if (error) throw new Error(error.message);
     if (!data || !data.ok) throw new Error((data && data.message) || 'فشل النشر');
 
+    // حفظ العروض بقاعدة البيانات - هيك شاشة البيع بتبيع بسعر العرض تلقائيًا
+    // على كل الأجهزة، مو بس على جهاز صاحب المحل
+    await supabase.from('daily_offers').delete().eq('branch_id', activeBranchId);
+    const offerRows = offerPicks.map(o => ({
+      branch_id: activeBranchId, product_id: o.id,
+      offer_price: Math.round(o.offerSyp), active: true,
+    }));
+    const { error: offErr } = await supabase.from('daily_offers').insert(offerRows);
+    if (offErr) console.error('تعذر حفظ العروض بنقطة البيع:', offErr.message);
+
     saveOfferHistory(offerPicks.map(o => o.id));
     await supabase.from('activity_log').insert({
       branch_id: activeBranchId, action_type: 'offers_published',
@@ -1676,8 +1748,9 @@ $('#offer-publish-btn')?.addEventListener('click', async () => {
     });
 
     statusEl.style.color = 'var(--green)';
-    statusEl.textContent = `✅ تم نشر ${data.count || offers.length} عرض على الموقع`;
+    statusEl.textContent = `✅ تم نشر ${data.count || offers.length} عرض على الموقع\nوشاشة البيع صارت تبيعهم بسعر العرض تلقائيًا`;
     offerPicks = [];
+    await loadProducts();
     $('#offer-wrap').style.display = 'none';
   } catch (err) {
     statusEl.style.color = 'var(--red)';
@@ -1848,8 +1921,32 @@ function productCost(p) { return effectivePrice(p, 'cost_price'); }
 
 // السعر الفعلي يلي بيدفعه الزبون: سعر التصفية ("السعر المحروق") لو مفعّل على المنتج،
 // وإلا سعر البيع العادي. بتشتغل عادي حتى لو أعمدة التصفية مو موجودة بقاعدة البيانات.
+// عروض اليوم المنشورة (product_id → سعر العرض) - من جدول daily_offers،
+// فكل الأجهزة (صاحب المحل والكاشير) بتشوف نفس السعر.
+let dailyOffersMap = {};
+
+async function loadDailyOffers() {
+  const { data, error } = await supabase.from('daily_offers')
+    .select('product_id, offer_price')
+    .eq('branch_id', activeBranchId).eq('active', true);
+  dailyOffersMap = {};
+  if (error) { console.error('daily_offers:', error.message); return; }
+  (data || []).forEach(r => { dailyOffersMap[r.product_id] = Number(r.offer_price) || 0; });
+}
+
+function offerPriceOf(p) {
+  const v = p ? dailyOffersMap[p.id] : 0;
+  return v > 0 ? v : 0;
+}
+function isOnOffer(p) { return offerPriceOf(p) > 0; }
+
+// ترتيب الأولوية للسعر الفعلي: عرض اليوم ← سعر التصفية ← السعر العادي
 function isBurnedActive(p) { return !!(p && p.burned_price_active && Number(p.burned_price) > 0); }
-function effectiveSalePrice(p) { return isBurnedActive(p) ? Number(p.burned_price) : productSell(p); }
+function effectiveSalePrice(p) {
+  const off = offerPriceOf(p);
+  if (off > 0) return off;
+  return isBurnedActive(p) ? Number(p.burned_price) : productSell(p);
+}
 
 // آخر سعر شراء لكل منتج - مبني من سجل فواتير التوريد (purchaseInvoicesCache)، راجع loadPurchaseInvoices()
 let lastPurchasePriceMap = {};
@@ -1884,12 +1981,14 @@ $('#usd-rate-save-btn').addEventListener('click', async () => {
 
 async function loadProducts() {
   await loadUsdRate();
+  await loadDailyOffers();
   const { data, error } = await supabase.from('products').select('*').eq('branch_id', activeBranchId).order('name');
   if (error) { console.error(error); return; }
   productsCache = data || [];
   renderCategoryFilters();
   renderProductsForSale();
   renderProductsAdmin();
+  renderLiveOffers();
   if (currentProfile && currentProfile.role === 'owner') await loadSupplierReturnProductPicker();
 }
 
@@ -1926,9 +2025,11 @@ function renderProductsForSale() {
   });
   $('#sale-products-list').innerHTML = list.map(p => `
     <div class="product-row">
-      <div class="product-name">${escapeHtml(p.name)}${p.serial_no ? ` <span style="color:var(--muted); font-weight:normal;">#${p.serial_no}</span>` : ''}</div>
+      <div class="product-name">${escapeHtml(p.name)}${p.serial_no ? ` <span style="color:var(--muted); font-weight:normal;">#${p.serial_no}</span>` : ''}${isOnOffer(p) ? ' <span style="background:var(--green); color:#fff; font-size:10px; padding:1px 7px; border-radius:10px;">🎯 عرض اليوم</span>' : ''}</div>
       <div class="product-meta">${escapeHtml(p.category || '-')} · متوفر: ${p.quantity}</div>
-      <div class="product-price">${productSell(p).toFixed(0)}</div>
+      <div class="product-price">${isOnOffer(p)
+        ? `<span style="color:var(--green);">${effectiveSalePrice(p).toFixed(0)}</span> <small style="color:var(--muted); text-decoration:line-through;">${productSell(p).toFixed(0)}</small>`
+        : effectiveSalePrice(p).toFixed(0)}</div>
       <button class="btn tiny add-to-cart" data-id="${p.id}">أضف</button>
     </div>
   `).join('') || '<p class="empty">لا يوجد منتجات بهالتصنيف</p>';
@@ -1952,8 +2053,8 @@ function addToCart(productId) {
   } else {
     cart.push({
       product_id: product.id, name: product.name,
-      price: productSell(product), basePrice: productSell(product), cost: productCost(product),
-      qty: 1, subtotal: productSell(product),
+      price: effectiveSalePrice(product), basePrice: effectiveSalePrice(product), cost: productCost(product),
+      qty: 1, subtotal: effectiveSalePrice(product),
     });
   }
   renderCart();
@@ -2036,7 +2137,7 @@ let saleInvoiceUnmatched = [];
 
 function addInvoiceItemToCart(product, qty, price) {
   qty = Math.max(1, parseInt(qty) || 1);
-  const unitPrice = price > 0 ? Number(price) : productSell(product);
+  const unitPrice = price > 0 ? Number(price) : effectiveSalePrice(product);
   const existing = cart.find(i => i.product_id === product.id);
   if (existing) {
     existing.qty += qty;
@@ -2044,7 +2145,7 @@ function addInvoiceItemToCart(product, qty, price) {
   } else {
     cart.push({
       product_id: product.id, name: product.name,
-      price: unitPrice, basePrice: productSell(product), cost: productCost(product),
+      price: unitPrice, basePrice: effectiveSalePrice(product), cost: productCost(product),
       qty, subtotal: unitPrice * qty,
     });
   }
@@ -3190,7 +3291,9 @@ function renderProductsAdmin() {
                <option value="usd" ${p.price_currency === 'usd' ? 'selected' : ''}>دولار $</option>
              </select>
            </div>`
-        : `${productSell(p).toFixed(0)}${p.price_currency === 'usd' ? ` <small style="color:var(--muted);">($${Number(p.sell_price).toFixed(2)})</small>` : ''}`}</td>
+        : `${isOnOffer(p)
+            ? `<span style="color:var(--green); font-weight:bold;">🎯 ${effectiveSalePrice(p).toFixed(0)}</span><br><small style="color:var(--muted); text-decoration:line-through;">${productSell(p).toFixed(0)}</small>`
+            : `${productSell(p).toFixed(0)}${p.price_currency === 'usd' ? ` <small style="color:var(--muted);">($${Number(p.sell_price).toFixed(2)})</small>` : ''}`}`}</td>
       <td>${editing
         ? `<input type="number" class="inline-qty" value="${Number(p.quantity)}" min="0" style="width:100%; min-width:65px;">`
         : p.quantity}</td>
@@ -5915,6 +6018,7 @@ function actionLabel(t) {
     debt_payment: 'دفعة دين',
     cash_reconcile: 'مطابقة صندوق',
     offers_published: 'نشر عروض يومية',
+    offers_stopped: 'إيقاف العروض اليومية',
     wheel_spin: 'لفّة عجلة فاتورة',
     stock_received: 'استلام وارد',
     sale_discount_edited: 'تعديل خصم فاتورة',
