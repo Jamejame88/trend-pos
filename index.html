@@ -4452,7 +4452,11 @@ $('#redeem-body')?.addEventListener('click', async (e) => {
   const product = productsCache.find(p => p.id === productId);
   if (!product) { alert('الصنف مو موجود بالفرع الحالي'); return; }
   if (Number(product.quantity) < 1) { alert(`"${productName}" خلص من المخزون - اختار صنف تاني`); return; }
-  if (!confirm(`استبدال ${pts} نقطة بهدية "${productName}"؟\nرح تنخصم النقاط وتنقص كمية الصنف من المخزون.`)) return;
+  const costPreview = productCost(product);
+  if (!confirm(`استبدال ${pts} نقطة بهدية "${productName}"؟\n\n` +
+    `· النقاط بتنخصم من رصيد الزبون\n` +
+    `· كمية الصنف بتنقص من المخزون\n` +
+    (costPreview > 0 ? `· كلفتها (${costPreview.toFixed(0)} ل.س) بتنسجّل كمصروف "هدايا نقاط"` : ''))) return;
 
   btn.disabled = true;
   try {
@@ -4467,17 +4471,36 @@ $('#redeem-body')?.addEventListener('click', async (e) => {
       .update({ quantity: Math.max(0, Number(product.quantity) - 1) }).eq('id', productId);
     if (prodErr) throw prodErr;
 
+    // الهدية بتطلع من مخزونك، فكلفتها لازم تنخصم من الأرباح.
+    // منسجّلها كمصروف بـ**سعر الشراء** مو سعر البيع - لأنه يلي خسرته فعليًا
+    // هو يلي دفعته بالصنف، مو يلي كنت رح تبيعه فيه.
+    const giftCost = productCost(product);
+    if (giftCost > 0) {
+      const { error: expErr } = await supabase.from('expenses').insert({
+        branch_id: activeBranchId,
+        description: `هدية نقاط: ${productName} - ${cpiPhone} (${pts} نقطة)`,
+        category: 'هدايا نقاط',
+        amount: giftCost,
+        performed_by: currentProfile ? currentProfile.id : null,
+      });
+      if (expErr) console.error('تعذر تسجيل كلفة الهدية كمصروف:', expErr.message);
+    }
+
     await supabase.from('activity_log').insert({
       branch_id: activeBranchId, action_type: 'points_redeemed',
-      description: `استبدال ${pts} نقطة - ${cpiPhone} - هدية: ${productName}`,
-      amount: 0, performed_by: currentProfile ? currentProfile.id : null,
+      description: `استبدال ${pts} نقطة - ${cpiPhone} - هدية: ${productName} (كلفة ${giftCost.toFixed(0)})`,
+      amount: giftCost, performed_by: currentProfile ? currentProfile.id : null,
     });
 
-    alert(`✅ تم الاستبدال - سلّم الزبون "${productName}"`);
+    alert(`✅ تم الاستبدال - سلّم الزبون "${productName}"` +
+      (giftCost > 0 ? `\nانسجّلت كلفتها (${giftCost.toFixed(0)} ل.س) بالمصاريف تحت بند "هدايا نقاط"` : ''));
     $('#redeem-modal').style.display = 'none';
     await loadProducts();
     await refreshCustomerPointsInfo();
-    if (currentProfile.role === 'owner') { await loadPointsLedger(); await loadCustomers(); }
+    if (currentProfile.role === 'owner') {
+      await loadPointsLedger(); await loadCustomers(); await loadExpenses();
+      if (reportUnlocked) await loadDailyReport();
+    }
   } catch (err) {
     alert('خطأ بالاستبدال: ' + err.message);
     btn.disabled = false;
