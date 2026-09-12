@@ -229,6 +229,41 @@
   }
   #scanner-view { width: 100%; border-radius: 8px; overflow: hidden; }
 
+  /* ---------- نافذة عجلة الفاتورة ---------- */
+  .wheel-modal{
+    display:none; position:fixed; inset:0; z-index:120;
+    background:rgba(8,8,8,.88); align-items:center; justify-content:center; padding:14px;
+  }
+  .wheel-modal.on{ display:flex; }
+  .wheel-box{
+    background:#141413; border:1px solid rgba(212,175,55,.3); border-radius:14px;
+    width:100%; max-width:400px; max-height:92vh; overflow-y:auto;
+    padding:18px; text-align:center; color:#F3EEE7;
+  }
+  .wheel-box h3{ margin:0 0 4px; font-size:15px; color:#E6C687; font-weight:500; letter-spacing:.06em; }
+  .wheel-box .w-sub{ font-size:12px; color:#8F877D; margin-bottom:12px; }
+  .w-pointer{
+    width:0; height:0; margin:0 auto -8px; position:relative; z-index:2;
+    border-left:11px solid transparent; border-right:11px solid transparent;
+    border-top:18px solid #D4AF37;
+  }
+  #wheel-svg{ width:100%; max-width:300px; display:block; margin:0 auto; }
+  .w-btn{
+    display:block; width:100%; margin-top:10px; padding:14px; border:0; border-radius:8px;
+    background:linear-gradient(120deg,#8E7434,#E0CB92 45%,#D4AF37);
+    color:#0A0A0A; font:inherit; font-size:13.5px; font-weight:bold; letter-spacing:.1em; cursor:pointer;
+  }
+  .w-btn:disabled{ opacity:.5; cursor:default; }
+  .w-btn.ghost{ background:transparent; border:1px solid rgba(212,175,55,.35); color:#E6C687; font-weight:normal; }
+  .w-msg{ font-size:12.5px; margin-top:10px; min-height:20px; line-height:1.8; }
+  .w-prize{ font-size:22px; color:#D4AF37; margin:8px 0 12px; line-height:1.4; }
+  .w-code{
+    font-family:ui-monospace,Menlo,Consolas,monospace; font-size:26px; letter-spacing:.14em;
+    background:#1B1A18; border:1px dashed #D4AF37; border-radius:10px;
+    padding:14px; margin:8px 0; direction:ltr;
+  }
+  .w-meta{ font-size:12px; color:#8F877D; line-height:1.9; }
+
   /* ---------- طباعة الفاتورة ---------- */
   #receipt-print-area { display: none; }
   .receipt {
@@ -292,7 +327,7 @@
     <div class="right">
       <select id="branch-picker" style="display:none;"></select>
       <span id="user-info"></span>
-      <a class="btn small secondary" id="wheel-open-btn" href="https://jamejame88.github.io/TREND/" target="_blank" rel="noopener" style="text-decoration:none;">🎡 العجلة</a>
+      <button type="button" class="btn small secondary" id="wheel-open-btn">🎡 عجلة الفاتورة</button>
       <button class="btn small secondary" id="logout-btn">خروج</button>
     </div>
   </header>
@@ -373,6 +408,7 @@
               <div style="font-size:11px; color:var(--muted);">أي تعديل هون بينبعت للزبون - بيخص هاي الفاتورة بس.</div>
             </details>
             <button type="button" class="btn block" id="whatsapp-send-btn" style="background:#25D366;">فتح واتساب وإرسال الفاتورة</button>
+            <button type="button" id="sale-wheel-btn" class="btn block secondary" style="margin-top:6px; display:none;">🎡 لِف عجلة الفاتورة لهاد الزبون</button>
             <button type="button" class="btn secondary tiny" id="whatsapp-dismiss-btn" style="margin-top:6px;">إخفاء</button>
           </div>
         </div>
@@ -1174,6 +1210,13 @@
             و<b>عجلة الفاتورة</b> لمين اشترى فعليًا (الجوائز الأغلى).
             العجلة بتقرأ الجوائز من هون مباشرة - ما بتحتاج ترفع ملف.
           </p>
+          <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px; padding:10px; border:1px solid var(--border); border-radius:8px;">
+            <label style="margin:0;">🧾 الحد الأدنى لقيمة الفاتورة حتى تاخد لفّة:</label>
+            <input type="number" id="wheel-min-total" min="0" step="any" style="width:110px; padding:7px; border-radius:8px; border:1px solid var(--border);">
+            <span style="font-size:12px; color:var(--muted);">ل.س</span>
+            <button type="button" class="btn tiny" id="wheel-min-save-btn">💾 حفظ</button>
+            <span id="wheel-min-status" style="font-size:12px; color:var(--muted);"></span>
+          </div>
           <div style="display:flex; gap:8px; margin-bottom:10px;">
             <button type="button" class="btn chip wheel-mode-chip active" data-mode="free">🎁 المجانية</button>
             <button type="button" class="btn chip wheel-mode-chip" data-mode="invoice">🧾 عجلة الفاتورة</button>
@@ -1225,6 +1268,31 @@
 
 <!-- ==================== منطقة طباعة الفاتورة (مخفية، تظهر بس وقت الطباعة) ==================== -->
 <div id="receipt-print-area"></div>
+
+<!-- ==================== نافذة عجلة الفاتورة ==================== -->
+<div id="wheel-modal" class="wheel-modal">
+  <div class="wheel-box">
+    <h3>🎡 عجلة الفاتورة</h3>
+    <div class="w-sub" id="wheel-sub"></div>
+
+    <div id="wheel-stage">
+      <div class="w-pointer"></div>
+      <svg id="wheel-svg" viewBox="0 0 350 350" aria-label="عجلة الفاتورة"></svg>
+      <button type="button" class="w-btn" id="wheel-spin-btn">لِف العجلة</button>
+    </div>
+
+    <div id="wheel-result" style="display:none;">
+      <div style="font-size:11px; letter-spacing:.2em; color:#8F877D;">الجائزة</div>
+      <div class="w-prize" id="wheel-prize"></div>
+      <div class="w-code" id="wheel-code"></div>
+      <div class="w-meta" id="wheel-meta"></div>
+      <button type="button" class="w-btn" id="wheel-wa-btn">أرسل الرمز على واتساب</button>
+    </div>
+
+    <div class="w-msg" id="wheel-msg"></div>
+    <button type="button" class="w-btn ghost" id="wheel-close-btn">إغلاق</button>
+  </div>
+</div>
 
 <!-- ==================== نافذة استبدال النقاط ==================== -->
 <div id="redeem-modal" class="scanner-modal">
@@ -1445,6 +1513,7 @@ $$('.tab-btn').forEach(btn => {
 async function refreshAll() {
   await loadProducts();
   try { await loadWaTemplate(); } catch (e) { console.error('wa_template:', e); }
+  try { await loadWheelMinTotal(); } catch (e) { console.error('wheel_min:', e); }
   try { await loadWheelPrizes(); } catch (e) { console.error('wheel_prizes:', e); }
   try { await loadPointsConfig(); } catch (e) { console.error('points_config:', e); }
   try { await loadPointsRewards(); } catch (e) {
@@ -2021,6 +2090,207 @@ function formatInvoiceNo(n) {
   return (n === null || n === undefined || n === '') ? '' : `TREND-${n}`;
 }
 
+// ================= نافذة عجلة الفاتورة (داخل نقطة البيع) =================
+// الرقم وقيمة الفاتورة موجودين بالذاكرة أصلًا، فما في داعي لصفحة منفصلة
+// ولا لتمرير بيانات بالرابط. الاستهلاك بينسجّل بالسيرفر (wheel_spins).
+const SB_FN_URL = SUPABASE_URL + '/functions/v1/customer-portal';
+
+let wPrizes = [], wSeg = 0, wArc = 0, wPicked = null, wSpinning = false, wPhone = null;
+
+// جوائز احتياطية لو ما انعبّت مجموعة "عجلة الفاتورة" بضبط البرنامج
+const WHEEL_FALLBACK = [
+  { label: 'حسم 10% على قسم المكياج', lines: ['حسم 10%', 'المكياج'],     weight: 30, tag: 'MKP' },
+  { label: 'حسم 15% على قسم العطور',  lines: ['حسم 15%', 'العطور'],      weight: 25, tag: 'PRF' },
+  { label: 'حسم 20% على قسم الألعاب', lines: ['حسم 20%', 'الألعاب'],     weight: 20, tag: 'TOY' },
+  { label: 'عطر 35مل بنصف السعر',     lines: ['عطر 35مل', 'بنصف السعر'], weight: 15, tag: 'P35' },
+  { label: 'حسم 50% على الإكسسوار',   lines: ['حسم 50%', 'الإكسسوار'],   weight:  8, tag: 'ACC' },
+  { label: 'طقم إكسسوار ستيل',        lines: ['طقم إكسسوار', 'ستيل'],    weight:  2, tag: 'STL' },
+];
+
+async function wheelApi(action, extra) {
+  try {
+    const res = await fetch(SB_FN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY,
+                 'Authorization': 'Bearer ' + SUPABASE_ANON_KEY },
+      body: JSON.stringify({ action, ...(extra || {}) }),
+    });
+    return await res.json();
+  } catch (e) { console.error('wheelApi:', e); return null; }
+}
+
+function drawWheelSvg() {
+  const c = 175, R = 143, ns = 'http://www.w3.org/2000/svg';
+  const svg = $('#wheel-svg');
+  if (!svg) return;
+  svg.innerHTML = '';
+  const mk = (t, a) => { const n = document.createElementNS(ns, t); for (const k in a) n.setAttribute(k, a[k]); return n; };
+  const rad = d => (d - 90) * Math.PI / 180;
+  const pt = (r, d) => [c + r * Math.cos(rad(d)), c + r * Math.sin(rad(d))];
+
+  const g = mk('g', { id: 'wheel-disc' });
+  svg.appendChild(g);
+  g.appendChild(mk('circle', { cx: c, cy: c, r: R + 6, fill: '#17140F', stroke: '#C6A44E', 'stroke-width': 1.5 }));
+
+  wPrizes.forEach((p, i) => {
+    const a0 = i * wArc, a1 = (i + 1) * wArc;
+    const [x0, y0] = pt(R, a0), [x1, y1] = pt(R, a1);
+    g.appendChild(mk('path', {
+      d: `M ${c} ${c} L ${x0} ${y0} A ${R} ${R} 0 0 1 ${x1} ${y1} Z`,
+      fill: i % 2 ? '#1E1A13' : '#2A2318', stroke: 'rgba(212,175,55,.35)', 'stroke-width': .8,
+    }));
+    const mid = a0 + wArc / 2;
+    const [tx, ty] = pt(R * 0.64, mid);
+    const t = mk('text', { x: tx, y: ty, fill: '#E6C687', 'font-size': 13,
+      'text-anchor': 'middle', transform: `rotate(${mid} ${tx} ${ty})` });
+    (p.lines || [p.label]).forEach((ln, k) => {
+      const ts = mk('tspan', { x: tx, dy: k === 0 ? 0 : 15 });
+      ts.textContent = ln;
+      t.appendChild(ts);
+    });
+    g.appendChild(t);
+  });
+
+  g.setAttribute('style', 'transform-origin:' + c + 'px ' + c + 'px');
+  svg.appendChild(mk('circle', { cx: c, cy: c, r: 30, fill: '#17140F', stroke: '#C6A44E', 'stroke-width': 1.5 }));
+  svg.appendChild(mk('circle', { cx: c, cy: c, r: 8, fill: '#C6A44E' }));
+}
+
+// بتاخد جوائز مجموعة "invoice" من نفس جدول wheel_prizes المحمّل بضبط البرنامج
+function wheelPrizesFromCache() {
+  const rows = (wheelPrizes || []).filter(p => p.mode === 'invoice' && p.active !== false);
+  if (rows.length < 3) return WHEEL_FALLBACK;
+  return rows.map(r => ({
+    label: r.label,
+    lines: [r.line1 || r.label, r.line2 || ''].filter(x => x !== ''),
+    weight: Number(r.weight) || 1,
+    tag: String(r.tag || 'GEN').toUpperCase(),
+  }));
+}
+
+async function openWheelModal(phone) {
+  wPhone = phone || null;
+  wPicked = null; wSpinning = false;
+  $('#wheel-result').style.display = 'none';
+  $('#wheel-stage').style.display = '';
+  $('#wheel-msg').textContent = '';
+  $('#wheel-msg').style.color = 'var(--muted)';
+  $('#wheel-spin-btn').disabled = true;
+  $('#wheel-modal').classList.add('on');
+
+  const disc = document.getElementById('wheel-disc');
+  if (disc) { disc.style.transition = 'none'; disc.style.transform = 'rotate(0deg)'; }
+
+  if (!wPhone) {
+    const typed = prompt('رقم موبايل الزبون:');
+    if (!typed) { $('#wheel-modal').classList.remove('on'); return; }
+    wPhone = normalizePhoneForWa(typed);
+    if (!wPhone) { $('#wheel-msg').style.color = 'var(--red)'; $('#wheel-msg').textContent = 'رقم غير صحيح'; return; }
+  }
+
+  wPrizes = wheelPrizesFromCache();
+  wSeg = wPrizes.length; wArc = 360 / wSeg;
+  drawWheelSvg();
+
+  const local = '0' + String(wPhone).replace(/^963/, '');
+  $('#wheel-sub').textContent = 'الزبون ' + local + ' — جارٍ التحقق…';
+  const res = await wheelApi('spin_check', { phone: wPhone });
+
+  if (!res || !res.ok) {
+    $('#wheel-msg').style.color = 'var(--red)';
+    $('#wheel-msg').textContent = (res && res.message) || 'ما قدرنا نتحقق - راجع الاتصال';
+    $('#wheel-sub').textContent = 'الزبون ' + local;
+    return;
+  }
+  if (!res.spins) {
+    $('#wheel-sub').textContent = 'الزبون ' + local;
+    $('#wheel-msg').style.color = 'var(--red)';
+    $('#wheel-msg').innerHTML = 'ما في لفّة متاحة لهاد الرقم.<br>' +
+      '<span style="color:#8F877D; font-size:11.5px;">لازم تكون فاتورته مسجّلة ومكتوب فيها رقمه، وقيمتها ' +
+      (res.minTotal || WHEEL_MIN_TOTAL) + ' ل.س فما فوق، وما استخدم لفّتها قبل.</span>';
+    return;
+  }
+  $('#wheel-sub').innerHTML = 'الزبون ' + local +
+    ' — <b style="color:#8FD37D;">' + res.spins + (res.spins === 1 ? ' لفّة متاحة' : ' لفّات متاحة') + '</b>';
+  $('#wheel-spin-btn').disabled = false;
+}
+
+function wPick() {
+  const total = wPrizes.reduce((s, p) => s + p.weight, 0);
+  let n = Math.random() * total;
+  for (let i = 0; i < wSeg; i++) { n -= wPrizes[i].weight; if (n <= 0) return i; }
+  return 0;
+}
+
+function wMakeCode(tag) {
+  const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let r = ''; for (let i = 0; i < 4; i++) r += A[Math.floor(Math.random() * A.length)];
+  return r + '-' + tag;
+}
+
+$('#wheel-spin-btn')?.addEventListener('click', () => {
+  if (wSpinning || !wPhone) return;
+  wSpinning = true;
+  $('#wheel-spin-btn').disabled = true;
+  $('#wheel-msg').textContent = '';
+  const i = wPick();
+  wPicked = wPrizes[i];
+  const disc = document.getElementById('wheel-disc');
+  disc.style.transition = 'transform 5s cubic-bezier(.17,.67,.16,1)';
+  disc.style.transform = 'rotate(' + (360 * 6 + (360 - (i * wArc + wArc / 2))) + 'deg)';
+  setTimeout(wFinish, 5200);
+});
+
+async function wFinish() {
+  wSpinning = false;
+  const code = wMakeCode(wPicked.tag);
+  const exp = new Date(Date.now() + 14 * 864e5);
+  $('#wheel-msg').style.color = 'var(--muted)';
+  $('#wheel-msg').textContent = 'جارٍ تسجيل اللفّة…';
+
+  const res = await wheelApi('spin_claim', { phone: wPhone, prize: wPicked.label, code });
+  if (!res || !res.ok || !res.claimed) {
+    $('#wheel-msg').style.color = 'var(--red)';
+    $('#wheel-msg').textContent = (res && res.message) || 'ما انسجّلت اللفّة - جرّب مرة تانية';
+    $('#wheel-spin-btn').disabled = false;
+    return;
+  }
+
+  $('#wheel-msg').textContent = '';
+  $('#wheel-prize').textContent = wPicked.label;
+  $('#wheel-code').textContent = code;
+  $('#wheel-meta').innerHTML =
+    'صالح لغاية ' + exp.toLocaleDateString('ar-SY', { day: 'numeric', month: 'long' }) +
+    (res.invoiceNo ? '<br>عن الفاتورة ' + formatInvoiceNo(res.invoiceNo) : '') +
+    (res.spins ? '<br>باقي ' + res.spins + ' لفّة لهاد الزبون' : '');
+
+  const txt = 'مبروك! ربحت من عجلة TREND:\n' + wPicked.label +
+    '\nالرمز: ' + code +
+    '\nصالح لغاية ' + exp.toLocaleDateString('ar-SY', { day: 'numeric', month: 'long' });
+  $('#wheel-wa-btn').onclick = () => {
+    const link = waUsesApp()
+      ? `whatsapp://send?phone=${wPhone}&text=${encodeURIComponent(txt)}`
+      : `https://web.whatsapp.com/send?phone=${wPhone}&text=${encodeURIComponent(txt)}`;
+    if (waUsesApp()) window.location.href = link; else window.open(link, 'trend_whatsapp');
+  };
+
+  $('#wheel-stage').style.display = 'none';
+  $('#wheel-result').style.display = 'block';
+
+  await supabase.from('activity_log').insert({
+    branch_id: activeBranchId, action_type: 'wheel_spin',
+    description: `لفّة عجلة فاتورة - ${wPhone} - ${wPicked.label} (${code})`,
+    amount: 0, performed_by: currentProfile ? currentProfile.id : null,
+  });
+}
+
+$('#wheel-close-btn')?.addEventListener('click', () => $('#wheel-modal').classList.remove('on'));
+$('#wheel-modal')?.addEventListener('click', (e) => {
+  if (e.target === $('#wheel-modal')) $('#wheel-modal').classList.remove('on');
+});
+$('#wheel-open-btn')?.addEventListener('click', () => openWheelModal(null));
+$('#sale-wheel-btn')?.addEventListener('click', () => openWheelModal(pendingWaPhone));
+
 // ================= جوائز عجلة الحظ =================
 // محفوظة بجدول wheel_prizes ومقسومة لمجموعتين (mode): free / invoice.
 // صفحة العجلة بتقراهن عبر الدالة الوسيطة، فأي تعديل هون بيوصلها بدون رفع ملف.
@@ -2036,6 +2306,29 @@ const WHEEL_SEED = [
   { label: 'حسم 50% على قسم الإكسسوار', line1: 'حسم 50%',   line2: 'الإكسسوار',  weight:  5, tag: 'ACC' },
   { label: 'طقم إكسسوار ستيل',          line1: 'طقم إكسسوار', line2: 'ستيل',     weight:  1, tag: 'STL' },
 ];
+
+// الحد الأدنى لقيمة الفاتورة المؤهّلة للفّة - محفوظ بـpoints_config (صف واحد مشترك)
+let WHEEL_MIN_TOTAL = 690;
+
+async function loadWheelMinTotal() {
+  const { data, error } = await supabase.from('points_config')
+    .select('wheel_min_total').eq('id', 1).maybeSingle();
+  if (!error && data && data.wheel_min_total != null) WHEEL_MIN_TOTAL = Number(data.wheel_min_total);
+  const inp = $('#wheel-min-total');
+  if (inp && document.activeElement !== inp) inp.value = WHEEL_MIN_TOTAL;
+}
+
+$('#wheel-min-save-btn')?.addEventListener('click', async () => {
+  const val = parseFloat($('#wheel-min-total').value);
+  const st = $('#wheel-min-status');
+  if (!(val >= 0)) { st.style.color = 'var(--red)'; st.textContent = '⚠ رقم غير صحيح'; return; }
+  const { error } = await supabase.from('points_config').update({ wheel_min_total: val }).eq('id', 1);
+  if (error) { st.style.color = 'var(--red)'; st.textContent = '❌ ' + error.message; return; }
+  WHEEL_MIN_TOTAL = val;
+  st.style.color = 'var(--green)';
+  st.textContent = '✅ تم الحفظ';
+  setTimeout(() => { st.textContent = ''; }, 3000);
+});
 
 async function loadWheelPrizes() {
   if (!currentProfile || currentProfile.role !== 'owner') return;
@@ -2315,12 +2608,18 @@ function waUsesApp() { return WA_IS_MOBILE || getWaOpenMode() === 'app'; }
   });
 })();
 let pendingWaPhone = null;
+let lastSaleTotal = 0;   // إجمالي آخر فاتورة - لتحديد أهلية اللفّة
+
 function showWhatsAppSend(phone, text) {
   pendingWaPhone = phone;
   pendingWaUrl = buildWaLink(phone, text);
   $('#whatsapp-text').value = text;              // النص قابل للتعديل قبل الإرسال
   $('#whatsapp-preview-wrap').open = waReviewMode(); // بينفتح لحاله بوضع المراجعة
   $('#whatsapp-send-phone').textContent = phone;
+  // رابط عجلة الفاتورة مع رقم الزبون جاهز (بصيغة محلية 09...)
+  // زر العجلة بيظهر بس إذا الفاتورة وصلت الحد الأدنى
+  const wb = $('#sale-wheel-btn');
+  if (wb) wb.style.display = (Number(lastSaleTotal) >= Number(WHEEL_MIN_TOTAL)) ? 'block' : 'none';
   $('#whatsapp-send-wrap').style.display = 'block';
 }
 function hideWhatsAppSend() {
@@ -2537,6 +2836,7 @@ $('#checkout-btn').addEventListener('click', async () => {
       saleIdShort: invoiceNoText,
       earnedPoints: earned, balancePoints: newBalance,
     });
+    lastSaleTotal = total;
     showWhatsAppSend(waPhone, waText); // كرت احتياطي - بيفيد بس لو المتصفح حجب الفتح التلقائي
     if (waReviewMode()) {
       // وضع المراجعة: ما منفتح شي - الكاشير بيراجع النص بالكرت الأخضر وبيضغط إرسال
@@ -5243,6 +5543,7 @@ function actionLabel(t) {
     supplier_return: 'مرتجع للمورد',
     debt_payment: 'دفعة دين',
     cash_reconcile: 'مطابقة صندوق',
+    wheel_spin: 'لفّة عجلة فاتورة',
     stock_received: 'استلام وارد',
     sale_discount_edited: 'تعديل خصم فاتورة',
   }[t] || t;
