@@ -1028,6 +1028,38 @@
       </div>
       <div id="report-content" style="display:none;">
         <div class="card">
+          <h2>📊 ملخص الأرباح</h2>
+          <p style="font-size:12px; color:var(--muted); margin-top:0;">
+            صافي الربح = المبيعات (بعد الخصم) − كلفة المباع − المرتجعات − المصاريف (وفيها هدايا النقاط).
+            التكلفة تقديرية: محسوبة على سعر الشراء الحالي بالنظام.
+          </p>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+            <button type="button" class="btn chip profit-chip active" data-p="day">اليوم</button>
+            <button type="button" class="btn chip profit-chip" data-p="week">هالأسبوع</button>
+            <button type="button" class="btn chip profit-chip" data-p="month">هالشهر</button>
+            <button type="button" class="btn chip profit-chip" data-p="year">هالسنة</button>
+            <button type="button" class="btn secondary tiny" id="profit-refresh-btn">🔄 تحديث</button>
+          </div>
+          <div id="profit-range" style="font-size:12px; color:var(--muted); margin-bottom:10px;"></div>
+          <div class="form-grid">
+            <div>عدد الفواتير: <strong id="pf-invoices">0</strong></div>
+            <div>المبيعات (بعد الخصم): <strong id="pf-sales">0</strong></div>
+            <div>الخصومات: <strong id="pf-discounts" style="color:var(--orange);">0</strong></div>
+            <div>مرتجعات الزباين: <strong id="pf-returns" style="color:var(--red);">0</strong></div>
+            <div>كلفة المباع: <strong id="pf-cost" style="color:var(--red);">0</strong></div>
+            <div>مجمل الربح: <strong id="pf-gross" style="color:var(--green);">0</strong></div>
+            <div>المصاريف: <strong id="pf-expenses" style="color:var(--red);">0</strong></div>
+            <div>منها هدايا نقاط: <strong id="pf-gifts">0</strong></div>
+          </div>
+          <div class="totals-row big" style="margin-top:10px; border-top:1px solid var(--border); padding-top:10px;">
+            <span>صافي الربح</span><span id="pf-net">0</span>
+          </div>
+          <div style="font-size:12px; color:var(--muted); margin-top:6px;">
+            هامش الربح: <strong id="pf-margin">0٪</strong> · متوسط الفاتورة: <strong id="pf-avg">0</strong>
+          </div>
+        </div>
+
+        <div class="card">
           <h2>📅 التقرير اليومي</h2>
           <p style="font-size:12px; color:var(--muted); margin-top:0;">التكلفة والربح هون تقديريان (محسوبان على سعر الشراء الحالي بالنظام، مو سعر الشراء وقت البيع فعليًا لو كان تغيّر).</p>
           <div class="form-grid">
@@ -5314,6 +5346,7 @@ async function unlockReport() {
   $('#report-content').style.display = 'block';
   await loadReportData();
   await loadDailyReport();
+  await loadProfitSummary();
 }
 
 $('#report-lock-btn').addEventListener('click', () => {
@@ -5447,6 +5480,109 @@ $('#cash-log-btn')?.addEventListener('click', async () => {
   $('#cash-log-btn').style.display = 'none';
   await loadActivityLog();
 });
+
+// ================= ملخص الأرباح (يومي / أسبوعي / شهري / سنوي) =================
+// صافي الربح = المبيعات بعد الخصم − كلفة المباع − المرتجعات − المصاريف.
+// المصاريف بتشمل هدايا النقاط (بتنسجّل تلقائيًا عند كل استبدال).
+let profitPeriod = 'day';
+
+// بداية ونهاية الفترة - الأسبوع بيبلش من السبت (بداية أسبوع العمل بسوريا)
+function periodBounds(period) {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (period === 'week') {
+    const dow = start.getDay();               // 0=أحد ... 6=سبت
+    const back = (dow + 1) % 7;               // السبت = بداية الأسبوع
+    start.setDate(start.getDate() - back);
+  } else if (period === 'month') {
+    start.setDate(1);
+  } else if (period === 'year') {
+    start.setMonth(0, 1);
+  }
+  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  return { startISO: start.toISOString(), endISO: end.toISOString(), start, end: now };
+}
+
+async function loadProfitSummary() {
+  if (!currentProfile || currentProfile.role !== 'owner') return;
+  const { startISO, endISO, start } = periodBounds(profitPeriod);
+
+  const labels = { day: 'اليوم', week: 'من بداية الأسبوع (السبت)', month: 'من بداية الشهر', year: 'من بداية السنة' };
+  $('#profit-range').textContent =
+    `${labels[profitPeriod]} · من ${start.toLocaleDateString('ar')} لليوم`;
+
+  const [salesRes, itemsRes, retRes, expRes] = await Promise.all([
+    supabase.from('sales').select('total, discount')
+      .eq('branch_id', activeBranchId).eq('status', 'completed')
+      .gte('sale_date', startISO).lt('sale_date', endISO),
+    supabase.from('sale_items')
+      .select('quantity, products(cost_price, price_currency), sales!inner(branch_id, status, sale_date)')
+      .eq('sales.branch_id', activeBranchId).eq('sales.status', 'completed')
+      .gte('sales.sale_date', startISO).lt('sales.sale_date', endISO),
+    supabase.from('returns').select('quantity, unit_price, products(cost_price, price_currency)')
+      .eq('branch_id', activeBranchId).eq('type', 'customer')
+      .gte('return_date', startISO).lt('return_date', endISO),
+    supabase.from('expenses').select('amount, category')
+      .eq('branch_id', activeBranchId)
+      .gte('expense_date', startISO).lt('expense_date', endISO),
+  ]);
+
+  const sales = salesRes.data || [];
+  const invoices = sales.length;
+  const gross = sales.reduce((s, r) => s + (Number(r.total) || 0), 0);
+  const discounts = sales.reduce((s, r) => s + (Number(r.discount) || 0), 0);
+
+  // كلفة المباع - محوّلة لليرة لو المنتج متسعّر بالدولار
+  const costOf = (prod) => {
+    let c = (prod && Number(prod.cost_price)) || 0;
+    if (prod && prod.price_currency === 'usd' && CURRENT_USD_RATE > 0) c *= CURRENT_USD_RATE;
+    return c;
+  };
+  let soldCost = 0;
+  (itemsRes.data || []).forEach(it => { soldCost += costOf(it.products) * Number(it.quantity); });
+
+  // المرتجعات: بتنقص من المبيعات، وكلفتها بترجع للمخزون فبتنقص من الكلفة كمان
+  let retValue = 0, retCost = 0;
+  (retRes.data || []).forEach(r => {
+    retValue += Number(r.unit_price) * Number(r.quantity);
+    retCost += costOf(r.products) * Number(r.quantity);
+  });
+
+  const expenses = (expRes.data || []).reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const gifts = (expRes.data || [])
+    .filter(e => String(e.category || '').indexOf('هدايا نقاط') !== -1)
+    .reduce((s, e) => s + (Number(e.amount) || 0), 0);
+
+  const netSales = gross - retValue;
+  const netCost = soldCost - retCost;
+  const grossProfit = netSales - netCost;
+  const net = grossProfit - expenses;
+
+  const fmt = (n) => Math.round(n).toLocaleString('en-US');
+  $('#pf-invoices').textContent = invoices;
+  $('#pf-sales').textContent = fmt(netSales);
+  $('#pf-discounts').textContent = discounts ? '-' + fmt(discounts) : '0';
+  $('#pf-returns').textContent = retValue ? '-' + fmt(retValue) : '0';
+  $('#pf-cost').textContent = '-' + fmt(netCost);
+  $('#pf-gross').textContent = fmt(grossProfit);
+  $('#pf-expenses').textContent = expenses ? '-' + fmt(expenses) : '0';
+  $('#pf-gifts').textContent = fmt(gifts);
+  $('#pf-net').textContent = fmt(net);
+  $('#pf-net').style.color = net >= 0 ? 'var(--green)' : 'var(--red)';
+  $('#pf-margin').textContent = netSales > 0 ? (net / netSales * 100).toFixed(1) + '٪' : '—';
+  $('#pf-avg').textContent = invoices > 0 ? fmt(netSales / invoices) : '0';
+}
+
+$('#report-content')?.addEventListener('click', (e) => {
+  const chip = e.target.closest('.profit-chip');
+  if (!chip) return;
+  document.querySelectorAll('.profit-chip').forEach(c => c.classList.remove('active'));
+  chip.classList.add('active');
+  profitPeriod = chip.dataset.p;
+  loadProfitSummary();
+});
+
+$('#profit-refresh-btn')?.addEventListener('click', loadProfitSummary);
 
 // ---------------- التقرير اليومي (صاحب المحل) ----------------
 function todayLocalDateStr() {
