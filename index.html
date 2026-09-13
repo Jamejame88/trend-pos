@@ -1574,13 +1574,18 @@ $('#offer-stop-btn')?.addEventListener('click', async () => {
     const { error } = await supabase.from('daily_offers').delete().eq('branch_id', activeBranchId);
     if (error) throw error;
 
-    // 2) شيلهم من الموقع كمان - منبعت عرض "فاضي" (سطر واحد مخفي) عشان
-    // publishOffers بترفض القائمة الفاضية، فهيك بتنمسح الورقة عمليًا
+    // 2) شيلهم من الموقع كمان - بدالة مسح حقيقية (clearOffers).
+    // قبل هيك كنا منبعت "عرض وهمي" فاضي، وهو كان بينكتب بالشيت
+    // وبيظهر للزبون كعرض غريب اسمه "—".
+    let siteCleared = false, clrMsg = '';
     try {
-      await supabase.functions.invoke('sync-products', {
-        body: { action: 'publishOffers', offers: [{ name: '—', priceOld: '', priceNew: '', note: '', cur: 'syp' }] },
+      const { data: cd, error: ce } = await supabase.functions.invoke('sync-products', {
+        body: { action: 'clearOffers' },
       });
-    } catch (e) { console.error('تعذر مسح عروض الموقع:', e); }
+      if (ce) clrMsg = ce.message;
+      else if (!cd || !cd.ok) clrMsg = (cd && cd.message) || 'رد غير متوقع';
+      else siteCleared = true;
+    } catch (e) { clrMsg = e.message; }
 
     await supabase.from('activity_log').insert({
       branch_id: activeBranchId, action_type: 'offers_stopped',
@@ -1588,8 +1593,14 @@ $('#offer-stop-btn')?.addEventListener('click', async () => {
       amount: 0, performed_by: currentProfile ? currentProfile.id : null,
     });
 
-    statusEl.style.color = 'var(--green)';
-    statusEl.textContent = '✅ انوقفت العروض - الأسعار رجعت طبيعية بشاشة البيع وبالموقع';
+    if (siteCleared) {
+      statusEl.style.color = 'var(--green)';
+      statusEl.textContent = '✅ انوقفت العروض - الأسعار رجعت طبيعية بشاشة البيع وبالموقع';
+    } else {
+      statusEl.style.color = 'var(--orange)';
+      statusEl.textContent = '⚠ الأسعار رجعت طبيعية بنقطة البيع، بس العروض لسا ظاهرة بالموقع.\n' +
+        'السبب: ' + clrMsg + '\nجرّب "أوقف العروض" مرة تانية، أو امسح ورقة "العروض" يدويًا.';
+    }
     await loadProducts();
   } catch (err) {
     statusEl.style.color = 'var(--red)';
