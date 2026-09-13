@@ -1155,7 +1155,7 @@
           </div>
         </div>
         <div class="card">
-          <h2>🏆 أفضل 10 منتجات مبيعًا (كل الوقت)</h2>
+          <h2>🏆 أفضل 10 منتجات مبيعًا (آخر سنة)</h2>
           <div style="overflow-x:auto;">
             <table>
               <thead><tr><th>المنتج</th><th>الكمية المباعة</th><th>إجمالي المبيعات</th></tr></thead>
@@ -1337,6 +1337,21 @@
 
 <!-- ==================== منطقة طباعة الفاتورة (مخفية، تظهر بس وقت الطباعة) ==================== -->
 <div id="receipt-print-area"></div>
+
+<!-- ==================== نافذة إدارة صور المنتج ==================== -->
+<div id="imgman-modal" class="scanner-modal">
+  <div class="scanner-box" style="max-width:560px; max-height:88vh; overflow-y:auto;">
+    <h3 style="margin-top:0;">🗂️ صور: <span id="imgman-name"></span></h3>
+    <p style="font-size:12px; color:var(--muted); margin-top:0;">
+      ترتيب الصور هو نفسه ترتيب الموديلات بالموقع — الصورة الأولى هي يلي بتظهر بالشبكة.
+      اسحب بالأسهم لترتيبهن، أو احذف يلي ما بدك ياه.
+    </p>
+    <div id="imgman-list"></div>
+    <p id="imgman-status" style="font-size:12.5px; margin-top:8px;"></p>
+    <button type="button" class="btn block" id="imgman-save-btn">💾 احفظ الترتيب والحذف</button>
+    <button type="button" class="btn secondary block" id="imgman-close-btn" style="margin-top:8px;">إغلاق</button>
+  </div>
+</div>
 
 <!-- ==================== نافذة عجلة الفاتورة ==================== -->
 <div id="wheel-modal" class="wheel-modal">
@@ -1849,40 +1864,70 @@ $$('.tab-btn').forEach(btn => {
     btn.classList.add('active');
     $$('.tab-panel').forEach(p => p.classList.remove('active'));
     $(`#tab-${btn.dataset.tab}`).classList.add('active');
+    ensureTabLoaded(btn.dataset.tab);   // بيانات التبويب بتتحمّل أول فتحة بس
   });
 });
 
 // ---------------- تحميل البيانات ----------------
+// ═══════════ تحميل البيانات ═══════════
+// المبدأ: عند فتح البرنامج منحمّل **الضروري للبيع فقط**، والباقي بينحمّل
+// أول ما تفتح تبويبه. قبل هيك كان 22 استعلام متسلسل عند الإقلاع (كل واحد
+// بينتظر اللي قبله) - يعني ~10 ثواني على نت بطيء قبل ما يقدر الكاشير يبيع.
+// والمتسلسل صار متوازي (Promise.all) فوقته صار وقت أبطأ استعلام مو مجموعهن.
+
+const safe = (fn, label) => fn().catch(e => { console.error(label + ':', e); });
+
+// تبويبات بتتحمّل عند أول فتحة (وبتنعاد لو تغيّر الفرع)
+const TAB_LOADERS = {
+  history:   () => loadSalesHistory(),
+  debts:     () => loadDebts(),
+  customers: () => loadCustomers(),
+  expenses:  () => loadExpenses(),
+  returns:   () => Promise.all([loadReturnSalePicker(), loadSupplierReturnProductPicker(), loadReturns()]),
+  purchases: () => loadPurchaseInvoices(),
+  log:       () => loadActivityLog(),
+  employees: () => loadEmployees(),
+  points:    () => Promise.all([loadPointsLedger(), loadPointsLiability()]),
+  suppliers: () => loadSupplierDebts(),
+  stock:     () => { loadStockCounts(); renderStockCount(); return Promise.resolve(); },
+};
+let tabsLoaded = {};
+
+async function ensureTabLoaded(tab) {
+  if (!currentProfile || currentProfile.role !== 'owner') return;
+  const fn = TAB_LOADERS[tab];
+  if (!fn || tabsLoaded[tab]) return;
+  tabsLoaded[tab] = true;
+  await safe(fn, 'tab_' + tab);
+}
+
 async function refreshAll() {
-  await loadProducts();
-  try { await loadWaTemplate(); } catch (e) { console.error('wa_template:', e); }
-  try { await loadWheelMinTotal(); } catch (e) { console.error('wheel_min:', e); }
-  try { await loadWheelPrizes(); } catch (e) { console.error('wheel_prizes:', e); }
-  try { await loadPointsConfig(); } catch (e) { console.error('points_config:', e); }
-  try { await loadPointsRewards(); } catch (e) {
-    console.error('points_rewards:', e);
-    pointsLoadError = e.message || String(e);
-    renderPointsRewards();
-  }
+  tabsLoaded = {};                      // تغيّر الفرع = كل تبويب لازم يعيد التحميل
   renderPendingSales();
-  await loadTodaySoldItems();
+
+  // ═══ الضروري للبيع - متوازي ═══
+  await Promise.all([
+    loadProducts(),                                       // المنتجات + العروض + سعر الصرف
+    safe(loadPointsConfig, 'points_config'),              // إعدادات النقاط (للمؤشر)
+    safe(loadPointsRewards, 'points_rewards'),            // المحطات (للاستبدال)
+  ]);
+
+  await safe(loadTodaySoldItems, 'today_sold');
+
+  // ═══ إعدادات صاحب المحل - بالخلفية، ما بتوقف الشاشة ═══
   if (currentProfile.role === 'owner') {
-    await loadSalesHistory();
-    await loadDebts();
-    await loadCustomers();
-    await loadExpenses();
-    await loadReturnSalePicker();
-    await loadSupplierReturnProductPicker();
-    await loadReturns();
-    await loadPurchaseInvoices();
-    await loadActivityLog();
-    await loadEmployees();
-    try { await loadPointsLedger(); } catch (e) { console.error('points_ledger:', e); }
-    try { await loadPointsLiability(); } catch (e) { console.error('points_liability:', e); }
-    loadStockCounts();
-    renderStockCount();
-    try { await loadSupplierDebts(); } catch (e) { console.error('supplier_debts:', e); }
-    if (reportUnlocked) { await loadReportData(); await loadDailyReport(); }
+    Promise.all([
+      safe(loadWaTemplate, 'wa_template'),
+      safe(loadWheelMinTotal, 'wheel_min'),
+      safe(loadWheelPrizes, 'wheel_prizes'),
+      safe(loadEmployees, 'employees'),                   // لازمة لأسماء الموظفين بالجداول
+    ]);
+    // التبويب المفتوح حاليًا بينحمّل فورًا
+    const active = document.querySelector('.tab-btn.active');
+    if (active) ensureTabLoaded(active.dataset.tab);
+    if (reportUnlocked) {
+      safe(loadReportData, 'report').then(() => safe(loadDailyReport, 'daily'));
+    }
   }
 }
 
@@ -3332,6 +3377,7 @@ function renderProductsAdmin() {
           <button class="btn tiny danger delete-product" data-id="${p.id}">حذف</button>
           ${!p.barcode ? `<button class="btn tiny secondary scan-row-barcode" data-id="${p.id}">📷 باركود</button>` : ''}
           <button class="btn tiny secondary upload-image-btn${p.has_web_image ? ' has-image' : ''}" data-id="${p.id}" data-name="${escapeAttr(p.name)}" title="${p.has_web_image ? 'مرفوعة صورة لهاد المنتج على الموقع' : 'ما في صورة مرفوعة لهاد المنتج على الموقع لسا'}">🖼️ صورة للموقع</button>
+          ${p.has_web_image ? `<button class="btn tiny secondary manage-images-btn" data-id="${p.id}" data-name="${escapeAttr(p.name)}" title="عرض وحذف وترتيب صور المنتج">🗂️ إدارة الصور</button>` : ''}
         `}
       </td>
     </tr>
@@ -3403,6 +3449,11 @@ $('#admin-products-list').addEventListener('click', async (e) => {
   }
   if (scanRowBtn) {
     openScanner('rowBarcode', scanRowBtn.dataset.id);
+  }
+  const manageBtn = e.target.closest('.manage-images-btn');
+  if (manageBtn) {
+    openImageManager(manageBtn.dataset.id, manageBtn.dataset.name);
+    return;
   }
   if (imgBtn) {
     pendingImageProduct = { id: imgBtn.dataset.id, name: imgBtn.dataset.name };
@@ -3510,6 +3561,105 @@ async function markProductHasWebImage(productId, value) {
     console.error('تعذر تحديث حالة الصورة محليًا:', err);
   }
 }
+
+// ---------------- إدارة صور المنتج (عرض / حذف / ترتيب) ----------------
+// الصور محفوظة بورقة "المنتجات" بالموقع (عمود E، مفصولة بفاصلة).
+// منقراهن عبر Apps Script، والحفظ بيعيد كتابة القائمة كاملة بنفس المسار
+// المستخدم بالرفع (setImage) - فما في داعي لأي دالة جديدة بالباك إند.
+let imgManProduct = null, imgManList = [];
+
+async function openImageManager(id, name) {
+  imgManProduct = { id, name };
+  imgManList = [];
+  $('#imgman-name').textContent = name;
+  $('#imgman-status').style.color = 'var(--muted)';
+  $('#imgman-status').textContent = '⏳ عم يجيب الصور من الموقع...';
+  $('#imgman-list').innerHTML = '';
+  $('#imgman-modal').style.display = 'flex';
+
+  try {
+    const { data, error } = await supabase.functions.invoke('sync-products', {
+      body: { action: 'productImages', code: id },
+    });
+    if (error) throw new Error(error.message);
+    if (!data || !data.ok) throw new Error((data && data.message) || 'ما قدرنا نجيب الصور');
+    imgManList = data.imgs || [];
+    $('#imgman-status').textContent = imgManList.length
+      ? `${imgManList.length} صورة`
+      : 'ما في صور مربوطة لهاد المنتج';
+    renderImageManager();
+  } catch (err) {
+    $('#imgman-status').style.color = 'var(--red)';
+    $('#imgman-status').textContent = '❌ ' + err.message +
+      '\n(تأكد إنك حدّثت دالة sync-products و Apps Script لآخر نسخة)';
+  }
+}
+
+function renderImageManager() {
+  $('#imgman-list').innerHTML = imgManList.map((url, i) => `
+    <div style="display:flex; gap:10px; align-items:center; padding:8px; border:1px solid var(--border); border-radius:8px; margin-bottom:6px;">
+      <img src="${escapeAttr(url)}" alt="" style="width:64px; height:64px; object-fit:cover; border-radius:6px; flex:0 0 64px;">
+      <div style="flex:1; font-size:12px; color:var(--muted); word-break:break-all;">
+        ${i === 0 ? '<b style="color:var(--green);">الصورة الرئيسية</b><br>' : `الموديل رقم ${i + 1}<br>`}
+        <span style="font-size:10.5px;">${escapeHtml(url.slice(-34))}</span>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:3px;">
+        <button class="btn tiny secondary img-up" data-i="${i}" ${i === 0 ? 'disabled' : ''}>▲</button>
+        <button class="btn tiny secondary img-down" data-i="${i}" ${i === imgManList.length - 1 ? 'disabled' : ''}>▼</button>
+      </div>
+      <button class="btn tiny danger img-del" data-i="${i}">✕</button>
+    </div>
+  `).join('') || '<p class="empty">ما في صور</p>';
+}
+
+$('#imgman-list')?.addEventListener('click', (e) => {
+  const up = e.target.closest('.img-up');
+  const down = e.target.closest('.img-down');
+  const del = e.target.closest('.img-del');
+  if (up) {
+    const i = +up.dataset.i;
+    [imgManList[i - 1], imgManList[i]] = [imgManList[i], imgManList[i - 1]];
+  } else if (down) {
+    const i = +down.dataset.i;
+    [imgManList[i + 1], imgManList[i]] = [imgManList[i], imgManList[i + 1]];
+  } else if (del) {
+    const i = +del.dataset.i;
+    if (!confirm(`حذف الصورة رقم ${i + 1}؟\nبتنشال من الموقع بعد الحفظ.`)) return;
+    imgManList.splice(i, 1);
+  } else return;
+  renderImageManager();
+});
+
+$('#imgman-save-btn')?.addEventListener('click', async () => {
+  if (!imgManProduct) return;
+  const statusEl = $('#imgman-status');
+  if (!imgManList.length) {
+    if (!confirm('ما ضل ولا صورة - المنتج رح يختفي من الموقع (بيصير بدون صورة). متأكد؟')) return;
+  }
+  $('#imgman-save-btn').disabled = true;
+  statusEl.style.color = 'var(--muted)';
+  statusEl.textContent = '⏳ عم يحفظ...';
+  try {
+    const { data, error } = await supabase.functions.invoke('sync-products', {
+      body: { action: 'setImages', code: imgManProduct.id, imgs: imgManList },
+    });
+    if (error) throw new Error(error.message);
+    if (!data || !data.ok) throw new Error((data && data.message) || 'فشل الحفظ');
+    await markProductHasWebImage(imgManProduct.id, imgManList.length > 0);
+    statusEl.style.color = 'var(--green)';
+    statusEl.textContent = `✅ تم الحفظ (${imgManList.length} صورة)`;
+  } catch (err) {
+    statusEl.style.color = 'var(--red)';
+    statusEl.textContent = '❌ ' + err.message;
+  } finally {
+    $('#imgman-save-btn').disabled = false;
+  }
+});
+
+$('#imgman-close-btn')?.addEventListener('click', () => {
+  $('#imgman-modal').style.display = 'none';
+  imgManProduct = null; imgManList = [];
+});
 
 // ---------------- رفع صور دفعة وحدة بالرقم المتسلسل (اسم الملف = رقم المنتج) ----------------
 function parseSerialFromFilename(filename) {
@@ -4456,7 +4606,8 @@ async function fetchBalance(phone) {
 }
 
 async function loadPointsBalances() {
-  const { data, error } = await supabase.from('points_ledger').select('phone, delta').limit(20000);
+  // حد أقل + قراءة الحقول اللازمة بس - الجدول بيكبر بسرعة مع كل بيعة
+  const { data, error } = await supabase.from('points_ledger').select('phone, delta').limit(8000);
   pointsBalances = {};
   if (error) return;
   (data || []).forEach((r) => {
@@ -5886,11 +6037,16 @@ async function loadReportData() {
   $('#report-total-expenses').textContent = total_expenses.toFixed(0);
   $('#report-net-profit').textContent = (expected_profit - total_expenses).toFixed(0);
 
+  // كان بيسحب كل أصناف المبيعات من بداية التاريخ بلا أي حد - مع تراكم
+  // السنين بيصير آلاف الأسطر بكل فتحة للتقرير. حصرناه بآخر سنة.
+  const yearAgo = new Date(Date.now() - 365 * 86400000).toISOString();
   const { data: items, error } = await supabase
     .from('sale_items')
-    .select('product_name, quantity, subtotal, products(category), sales!inner(branch_id, status)')
+    .select('product_name, quantity, subtotal, products(category), sales!inner(branch_id, status, sale_date)')
     .eq('sales.branch_id', activeBranchId)
-    .eq('sales.status', 'completed');
+    .eq('sales.status', 'completed')
+    .gte('sales.sale_date', yearAgo)
+    .limit(20000);
   if (error) { console.error(error); return; }
 
   const byProduct = {};
