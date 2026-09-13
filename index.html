@@ -1714,41 +1714,56 @@ $('#offer-publish-btn')?.addEventListener('click', async () => {
 
   $('#offer-publish-btn').disabled = true;
   statusEl.style.color = 'var(--muted)';
-  statusEl.textContent = '⏳ عم ينشر...';
+  statusEl.textContent = '⏳ عم يحفظ بنقطة البيع...';
   try {
-    const offers = offerPicks.map(o => ({
-      name: o.name,
-      priceOld: Math.round(o.currentSyp),
-      priceNew: Math.round(o.offerSyp),
-      note: 'عرض اليوم',
-      img: '',              // Apps Script بياخد الصورة من ورقة المنتجات بالاسم
-      cur: 'syp',
-    }));
-    const { data, error } = await supabase.functions.invoke('sync-products', {
-      body: { action: 'publishOffers', offers },
-    });
-    if (error) throw new Error(error.message);
-    if (!data || !data.ok) throw new Error((data && data.message) || 'فشل النشر');
-
-    // حفظ العروض بقاعدة البيانات - هيك شاشة البيع بتبيع بسعر العرض تلقائيًا
-    // على كل الأجهزة، مو بس على جهاز صاحب المحل
+    // ═══ الخطوة 1: نقطة البيع أولًا (الأهم) ═══
+    // أسعار محلك ما لازم تعتمد على نجاح الاتصال بموقع خارجي. لو عكسنا الترتيب
+    // وفشل الموقع، بتلاقي حالك معلن سعر بمكان وبتبيع بسعر تاني.
     await supabase.from('daily_offers').delete().eq('branch_id', activeBranchId);
     const offerRows = offerPicks.map(o => ({
       branch_id: activeBranchId, product_id: o.id,
       offer_price: Math.round(o.offerSyp), active: true,
     }));
     const { error: offErr } = await supabase.from('daily_offers').insert(offerRows);
-    if (offErr) console.error('تعذر حفظ العروض بنقطة البيع:', offErr.message);
+    if (offErr) throw new Error('ما انحفظت العروض بنقطة البيع: ' + offErr.message);
 
     saveOfferHistory(offerPicks.map(o => o.id));
     await supabase.from('activity_log').insert({
       branch_id: activeBranchId, action_type: 'offers_published',
-      description: `نشر ${offers.length} عرض يومي: ` + offers.map(o => o.name).join('، '),
+      description: `نشر ${offerPicks.length} عرض يومي: ` + offerPicks.map(o => o.name).join('، '),
       amount: 0, performed_by: currentProfile ? currentProfile.id : null,
     });
 
-    statusEl.style.color = 'var(--green)';
-    statusEl.textContent = `✅ تم نشر ${data.count || offers.length} عرض على الموقع\nوشاشة البيع صارت تبيعهم بسعر العرض تلقائيًا`;
+    // ═══ الخطوة 2: الموقع (لو فشلت، نقطة البيع بتضل شغّالة) ═══
+    statusEl.textContent = '✅ انحفظت بنقطة البيع\n⏳ عم ينشر على الموقع...';
+    let siteOk = false, siteMsg = '';
+    try {
+      const offers = offerPicks.map(o => ({
+        name: o.name,
+        priceOld: Math.round(o.currentSyp),
+        priceNew: Math.round(o.offerSyp),
+        note: 'عرض اليوم',
+        img: '',              // Apps Script بياخد الصورة من ورقة المنتجات بالاسم
+        cur: 'syp',
+      }));
+      const { data, error } = await supabase.functions.invoke('sync-products', {
+        body: { action: 'publishOffers', offers },
+      });
+      if (error) siteMsg = error.message;
+      else if (!data || !data.ok) siteMsg = (data && data.message) || 'رد غير متوقع';
+      else siteOk = true;
+    } catch (e) { siteMsg = e.message; }
+
+    const n = offerPicks.length;
+    if (siteOk) {
+      statusEl.style.color = 'var(--green)';
+      statusEl.textContent = `✅ تم نشر ${n} عرض على الموقع\nوشاشة البيع صارت تبيعهم بسعر العرض تلقائيًا`;
+    } else {
+      statusEl.style.color = 'var(--orange)';
+      statusEl.textContent = `⚠ العروض شغّالة بنقطة البيع (${n} صنف) بس ما وصلت للموقع.\n` +
+        `السبب: ${siteMsg}\n` +
+        `تأكد إنك حدّثت دالة sync-products وأعدت نشر Apps Script، وجرّب "انشر" مرة تانية.`;
+    }
     offerPicks = [];
     await loadProducts();
     $('#offer-wrap').style.display = 'none';
