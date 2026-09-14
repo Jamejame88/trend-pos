@@ -1273,6 +1273,33 @@
           <button class="btn danger" id="move-products-btn">🔀 نقل كل المنتجات الآن</button>
         </div>
         <div class="card">
+          <h2>💱 اربط كل الأسعار بسعر الصرف</h2>
+          <p style="font-size:13px; color:var(--muted); margin-top:0;">
+            بيحوّل منتجات <b>الليرة</b> لتسعير <b>دولار</b> (السعر الحالي ÷ سعر الصرف)، فتصير
+            أسعارها تتحدث لحالها مع كل تغيير بسعر الصرف — متل منتجات الدولار تمامًا.
+            <b>السعر المعروض ما بيتغيّر اليوم</b>، بس بيبلّش يتحرك مع الصرف من هلق.
+          </p>
+          <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+            <label>قرّب الأسعار لأقرب:</label>
+            <input type="number" id="round-step-input" min="1" step="1" style="width:80px; padding:7px; border-radius:8px; border:1px solid var(--border);">
+            <span style="font-size:12px; color:var(--muted);">ل.س</span>
+            <button type="button" class="btn tiny" id="round-step-save-btn">💾 حفظ</button>
+            <span id="round-step-status" style="font-size:12px; color:var(--muted);"></span>
+          </div>
+          <button type="button" class="btn secondary" id="usd-link-preview-btn">🔍 معاينة التحويل</button>
+          <div id="usd-link-wrap" style="display:none; margin-top:10px;">
+            <div style="max-height:45vh; overflow-y:auto; overflow-x:auto;">
+              <table>
+                <thead><tr><th>المنتج</th><th>سعره الآن</th><th>بالدولار</th><th>المعروض بعد التحويل</th><th>الفرق</th></tr></thead>
+                <tbody id="usd-link-list"></tbody>
+              </table>
+            </div>
+            <button type="button" class="btn danger" id="usd-link-apply-btn" style="margin-top:8px;">✔ حوّلهم لتسعير دولار</button>
+          </div>
+          <p id="usd-link-status" style="font-size:13px; margin-top:8px; white-space:pre-line;"></p>
+        </div>
+
+        <div class="card">
           <h2>🎡 جوائز عجلة الحظ</h2>
           <p style="font-size:13px; color:var(--muted); margin-top:0;">
             مجموعتين منفصلتين: <b>المجانية</b> لأي زائر (جوائز صغيرة - هدفها تجيب أرقام)،
@@ -1982,9 +2009,30 @@ async function loadUsdRate() {
 
 // بيرجع السعر الفعلي بالليرة لأي حقل سعر بالمنتج (cost_price أو sell_price)،
 // محوّل تلقائيًا حسب سعر الصرف الحالي إذا كان المنتج متسعّر بالدولار.
+// خطوة التقريب لأسعار الدولار المحوّلة - بدونها بتطلع كسور (347.82)
+// محفوظة بالإعدادات فبتقدر تغيّرها من الشاشة.
+let PRICE_ROUND_STEP = 10;
+
+async function loadPriceRoundStep() {
+  const { data, error } = await supabase.from('settings').select('value')
+    .eq('branch_id', activeBranchId).eq('key', 'price_round_step').maybeSingle();
+  if (!error && data && Number(data.value) > 0) PRICE_ROUND_STEP = Number(data.value);
+  const inp = $('#round-step-input');
+  if (inp && document.activeElement !== inp) inp.value = PRICE_ROUND_STEP;
+}
+
+function roundPrice(v) {
+  const step = Number(PRICE_ROUND_STEP) > 0 ? Number(PRICE_ROUND_STEP) : 1;
+  return Math.round(v / step) * step;
+}
+
 function effectivePrice(product, field) {
   const raw = Number(product && product[field]) || 0;
-  if (product && product.price_currency === 'usd' && CURRENT_USD_RATE > 0) return raw * CURRENT_USD_RATE;
+  if (product && product.price_currency === 'usd' && CURRENT_USD_RATE > 0) {
+    const converted = raw * CURRENT_USD_RATE;
+    // التقريب على سعر البيع بس - الكلفة بتضل دقيقة عشان حساب الأرباح يضل صح
+    return field === 'sell_price' ? roundPrice(converted) : converted;
+  }
   return raw;
 }
 function productSell(p) { return effectivePrice(p, 'sell_price'); }
@@ -2052,6 +2100,7 @@ $('#usd-rate-save-btn').addEventListener('click', async () => {
 
 async function loadProducts() {
   await loadUsdRate();
+  await loadPriceRoundStep();
   await loadDailyOffers();
   const { data, error } = await supabase.from('products').select('*').eq('branch_id', activeBranchId).order('name');
   if (error) { console.error(error); return; }
@@ -2706,6 +2755,126 @@ $('#wheel-modal')?.addEventListener('click', (e) => {
 });
 $('#wheel-open-btn')?.addEventListener('click', () => openWheelModal(null));
 $('#sale-wheel-btn')?.addEventListener('click', () => openWheelModal(pendingWaPhone));
+
+// ================= ربط كل الأسعار بسعر الصرف =================
+// بيحوّل منتجات الليرة لتسعير دولار: السعر الحالي ÷ سعر الصرف.
+// بعدها بتشتغل بنفس آلية منتجات الدولار الموجودة من زمان (productSell)
+// فما في منطق جديد ممكن ينكسر - بس تحويل بيانات لمرة وحدة.
+let usdLinkRows = [];
+
+$('#round-step-save-btn')?.addEventListener('click', async () => {
+  const val = parseInt($('#round-step-input').value, 10);
+  const st = $('#round-step-status');
+  if (!(val > 0)) { st.style.color = 'var(--red)'; st.textContent = '⚠ رقم غير صحيح'; return; }
+  const { data: ex } = await supabase.from('settings').select('key')
+    .eq('branch_id', activeBranchId).eq('key', 'price_round_step').maybeSingle();
+  let error;
+  if (ex) {
+    ({ error } = await supabase.from('settings').update({ value: String(val) })
+      .eq('branch_id', activeBranchId).eq('key', 'price_round_step'));
+  } else {
+    ({ error } = await supabase.from('settings')
+      .insert({ branch_id: activeBranchId, key: 'price_round_step', value: String(val) }));
+  }
+  if (error) { st.style.color = 'var(--red)'; st.textContent = '❌ ' + error.message; return; }
+  PRICE_ROUND_STEP = val;
+  st.style.color = 'var(--green)';
+  st.textContent = '✅ تم الحفظ';
+  setTimeout(() => { st.textContent = ''; }, 3000);
+  renderProductsForSale(); renderProductsAdmin();
+});
+
+$('#usd-link-preview-btn')?.addEventListener('click', () => {
+  const statusEl = $('#usd-link-status');
+  const rate = Number(CURRENT_USD_RATE) || 0;
+  if (!(rate > 0)) {
+    statusEl.style.color = 'var(--red)';
+    statusEl.textContent = '⚠ لازم تحدد سعر الصرف أول (كرت "💱 سعر صرف الدولار" بتبويب المنتجات)';
+    return;
+  }
+
+  usdLinkRows = productsCache
+    .filter(p => (p.price_currency || 'syp') !== 'usd' && Number(p.sell_price) > 0)
+    .map(p => {
+      const cur = Number(p.sell_price);                 // سعره بالليرة الآن
+      const usd = cur / rate;                           // قيمته بالدولار
+      const shown = roundPrice(usd * rate);             // شو رح ينعرض بعد التحويل
+      return {
+        id: p.id, name: p.name, cur, usd,
+        usdCost: (Number(p.cost_price) || 0) / rate,
+        shown, diff: shown - cur,
+      };
+    })
+    .sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));  // الأكبر فرقًا أول
+
+  if (!usdLinkRows.length) {
+    $('#usd-link-wrap').style.display = 'none';
+    statusEl.style.color = 'var(--green)';
+    statusEl.textContent = '✅ كل المنتجات مسعّرة بالدولار أصلًا - ما في شي يتحوّل.';
+    return;
+  }
+
+  $('#usd-link-list').innerHTML = usdLinkRows.map(r => `
+    <tr>
+      <td>${escapeHtml(r.name)}</td>
+      <td>${r.cur.toFixed(0)}</td>
+      <td style="color:var(--muted);">$${r.usd.toFixed(3)}</td>
+      <td style="font-weight:bold;">${r.shown.toFixed(0)}</td>
+      <td style="color:${r.diff === 0 ? 'var(--muted)' : (r.diff > 0 ? 'var(--green)' : 'var(--orange)')};">
+        ${r.diff === 0 ? '=' : (r.diff > 0 ? '+' : '') + r.diff.toFixed(0)}</td>
+    </tr>`).join('');
+
+  const changed = usdLinkRows.filter(r => r.diff !== 0).length;
+  $('#usd-link-wrap').style.display = 'block';
+  statusEl.style.color = 'var(--muted)';
+  statusEl.textContent = `${usdLinkRows.length} منتج رح يتحوّل` +
+    (changed ? `\n⚠ ${changed} منهم سعرهم المعروض رح يتغيّر بسبب التقريب (شوف عمود الفرق)` :
+               '\n✅ ولا سعر معروض رح يتغيّر');
+});
+
+$('#usd-link-apply-btn')?.addEventListener('click', async () => {
+  if (!usdLinkRows.length) return;
+  const statusEl = $('#usd-link-status');
+  const n = usdLinkRows.length;
+  if (!confirm(`تحويل ${n} منتج لتسعير دولار؟\n\n` +
+    `· أسعارهم بتصير تتحدث تلقائيًا مع سعر الصرف\n` +
+    `· سعر الصرف الحالي (${CURRENT_USD_RATE}) هو الأساس\n` +
+    `· ما فيك تتراجع تلقائيًا\n\n` +
+    `تأكد إنه سعر الصرف المحفوظ صحيح قبل ما تكمّل.`)) return;
+
+  $('#usd-link-apply-btn').disabled = true;
+  statusEl.style.color = 'var(--muted)';
+  statusEl.textContent = '⏳ عم يحوّل... لا تسكّر الصفحة';
+  let done = 0;
+  try {
+    for (const r of usdLinkRows) {
+      const { error } = await supabase.from('products').update({
+        price_currency: 'usd',
+        sell_price: r.usd,
+        cost_price: r.usdCost,        // الكلفة كمان لازم تتحوّل وإلا الأرباح بتطلع غلط
+      }).eq('id', r.id);
+      if (error) throw error;
+      done++;
+      if (done % 25 === 0) statusEl.textContent = `⏳ ${done} من ${n}...`;
+    }
+    await supabase.from('activity_log').insert({
+      branch_id: activeBranchId, action_type: 'usd_linked',
+      description: `ربط ${n} منتج بسعر الصرف (تحويل لتسعير دولار على سعر ${CURRENT_USD_RATE})`,
+      amount: 0, performed_by: currentProfile ? currentProfile.id : null,
+    });
+    statusEl.style.color = 'var(--green)';
+    statusEl.textContent = `✅ تم تحويل ${done} منتج - كل أسعارك صارت مربوطة بسعر الصرف`;
+    usdLinkRows = [];
+    $('#usd-link-wrap').style.display = 'none';
+    await loadProducts();
+  } catch (err) {
+    statusEl.style.color = 'var(--red)';
+    statusEl.textContent = `❌ وقف عند المنتج ${done} من ${n}: ${err.message}\n` +
+      `يلي انحوّل ضل محوّل - اعمل "معاينة" مرة تانية وكمّل الباقي.`;
+  } finally {
+    $('#usd-link-apply-btn').disabled = false;
+  }
+});
 
 // ================= جوائز عجلة الحظ =================
 // محفوظة بجدول wheel_prizes ومقسومة لمجموعتين (mode): free / invoice.
@@ -6201,6 +6370,7 @@ function actionLabel(t) {
     cash_reconcile: 'مطابقة صندوق',
     offers_published: 'نشر عروض يومية',
     offers_stopped: 'إيقاف العروض اليومية',
+    usd_linked: 'ربط الأسعار بسعر الصرف',
     wheel_spin: 'لفّة عجلة فاتورة',
     stock_received: 'استلام وارد',
     sale_discount_edited: 'تعديل خصم فاتورة',
