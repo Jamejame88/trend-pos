@@ -1240,6 +1240,27 @@
         <button class="btn" id="add-employee-btn">💾 إنشاء الحساب</button>
         <div id="employee-status" style="margin-top:8px; font-size:13px;"></div>
       </div>
+      <div class="card" id="emp-edit-card" style="display:none; border:2px solid var(--green);">
+        <h2>✏ تعديل: <span id="emp-edit-username"></span></h2>
+        <p style="font-size:12px; color:var(--muted); margin-top:0;">
+          اسم المستخدم ما بينتغيّر (هو مفتاح الدخول). لتغيير كلمة السر استخدم الزر بالجدول.
+        </p>
+        <div class="form-grid">
+          <div class="field"><label>الاسم الكامل</label><input type="text" id="emp-edit-fullname"></div>
+          <div class="field"><label>الفرع</label><select id="emp-edit-branch"></select></div>
+          <div class="field">
+            <label>الصلاحية</label>
+            <select id="emp-edit-role">
+              <option value="employee">موظف</option>
+              <option value="owner">صاحب محل</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn" id="emp-edit-save-btn">💾 احفظ التعديلات</button>
+        <button class="btn secondary" id="emp-edit-cancel-btn">إلغاء</button>
+        <div id="emp-edit-status" style="margin-top:8px; font-size:13px;"></div>
+      </div>
+
       <div class="card">
         <h2>الموظفين الحاليين</h2>
         <div style="overflow-x:auto;">
@@ -1481,6 +1502,14 @@ async function afterLogin() {
     alert('ما قدرنا نجيب بيانات حسابك. تأكد إنه تم إنشاء صف إلك بجدول profiles بنفس الـ id تبع حسابك.');
     await supabase.auth.signOut();
     showScreen('#login-screen');
+    return;
+  }
+  // حساب معطّل: منوقفه هون فورًا حتى لو كلمة السر صحيحة
+  if (profile.active === false) {
+    await supabase.auth.signOut();
+    showScreen('#login-screen');
+    const eb = $('#login-error');
+    if (eb) eb.textContent = 'هاد الحساب معطّل - راجع صاحب المحل';
     return;
   }
   currentProfile = profile;
@@ -6371,6 +6400,9 @@ function actionLabel(t) {
     offers_published: 'نشر عروض يومية',
     offers_stopped: 'إيقاف العروض اليومية',
     usd_linked: 'ربط الأسعار بسعر الصرف',
+    employee_updated: 'تعديل بيانات موظف',
+    employee_disabled: 'تعطيل حساب موظف',
+    employee_enabled: 'تفعيل حساب موظف',
     wheel_spin: 'لفّة عجلة فاتورة',
     stock_received: 'استلام وارد',
     sale_discount_edited: 'تعديل خصم فاتورة',
@@ -6394,13 +6426,19 @@ function renderEmployees() {
   if (!list) return;
   list.innerHTML = employeesCache.map(e => {
     const branchName = (branches.find(b => b.id === e.branch_id) || {}).name || '-';
+    const off = e.active === false;
+    const isMe = currentProfile && e.id === currentProfile.id;
     return `
-    <tr>
-      <td>${escapeHtml(e.username)}</td>
+    <tr${off ? ' style="opacity:.55; background:#faf4f4;"' : ''}>
+      <td>${escapeHtml(e.username)}${off ? ' <small style="color:var(--red);">(معطّل)</small>' : ''}</td>
       <td>${escapeHtml(e.full_name || '-')}</td>
       <td>${e.role === 'owner' ? 'صاحب محل' : 'موظف'}</td>
       <td>${escapeHtml(branchName)}</td>
-      <td><button class="btn tiny secondary reset-password-btn" data-id="${e.id}" data-username="${escapeAttr(e.username)}">🔑 تغيير كلمة السر</button></td>
+      <td style="white-space:nowrap;">
+        <button class="btn tiny secondary edit-employee-btn" data-id="${e.id}">✏ تعديل</button>
+        <button class="btn tiny secondary reset-password-btn" data-id="${e.id}" data-username="${escapeAttr(e.username)}">🔑 كلمة السر</button>
+        ${isMe ? '' : `<button class="btn tiny ${off ? 'secondary' : 'danger'} toggle-employee-btn" data-id="${e.id}" data-username="${escapeAttr(e.username)}" data-off="${off ? '1' : '0'}">${off ? '↩ تفعيل' : '⏸ تعطيل'}</button>`}
+      </td>
     </tr>
   `;
   }).join('') || '<tr><td colspan="5">لا يوجد موظفين بعد</td></tr>';
@@ -6439,7 +6477,95 @@ $('#add-employee-btn').addEventListener('click', async () => {
   }
 });
 
+// ——— تعديل بيانات الموظف (الاسم/الفرع/الصلاحية) ———
+// تعديل مباشر على جدول profiles - ما بيحتاج دالة وسيطة لأنه ما بيلمس
+// حساب الدخول نفسه (اسم المستخدم وكلمة السر).
+let editingEmployeeId = null;
+
+function openEmployeeEdit(id) {
+  const emp = employeesCache.find(x => x.id === id);
+  if (!emp) return;
+  editingEmployeeId = id;
+  $('#emp-edit-username').textContent = emp.username;
+  $('#emp-edit-fullname').value = emp.full_name || '';
+  $('#emp-edit-role').value = emp.role || 'employee';
+  $('#emp-edit-branch').innerHTML = branches
+    .map(b => `<option value="${b.id}">${escapeHtml(b.name)}</option>`).join('');
+  if (emp.branch_id) $('#emp-edit-branch').value = emp.branch_id;
+  $('#emp-edit-status').textContent = '';
+  $('#emp-edit-card').style.display = 'block';
+  $('#emp-edit-card').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+$('#emp-edit-cancel-btn')?.addEventListener('click', () => {
+  editingEmployeeId = null;
+  $('#emp-edit-card').style.display = 'none';
+});
+
+$('#emp-edit-save-btn')?.addEventListener('click', async () => {
+  if (!editingEmployeeId) return;
+  const statusEl = $('#emp-edit-status');
+  const emp = employeesCache.find(x => x.id === editingEmployeeId);
+  const newRole = $('#emp-edit-role').value;
+
+  // حماية: ما يشيل صلاحيته عن حاله فيقفل عليه البرنامج
+  if (emp && currentProfile && emp.id === currentProfile.id && newRole !== 'owner') {
+    statusEl.style.color = 'var(--red)';
+    statusEl.textContent = '⚠ ما بتقدر تشيل صلاحية صاحب المحل عن حسابك أنت';
+    return;
+  }
+
+  statusEl.style.color = 'var(--muted)';
+  statusEl.textContent = '⏳ عم يحفظ...';
+  const { error } = await supabase.from('profiles').update({
+    full_name: $('#emp-edit-fullname').value.trim() || null,
+    role: newRole,
+    branch_id: $('#emp-edit-branch').value || null,
+  }).eq('id', editingEmployeeId);
+
+  if (error) {
+    statusEl.style.color = 'var(--red)';
+    statusEl.textContent = '❌ ' + error.message;
+    return;
+  }
+  await supabase.from('activity_log').insert({
+    branch_id: activeBranchId, action_type: 'employee_updated',
+    description: `تعديل بيانات الموظف: ${emp ? emp.username : ''}`,
+    amount: 0, performed_by: currentProfile ? currentProfile.id : null,
+  });
+  statusEl.style.color = 'var(--green)';
+  statusEl.textContent = '✅ تم الحفظ';
+  editingEmployeeId = null;
+  setTimeout(() => { $('#emp-edit-card').style.display = 'none'; }, 1200);
+  await loadEmployees();
+});
+
 $('#employees-list').addEventListener('click', async (e) => {
+  const editBtn = e.target.closest('.edit-employee-btn');
+  if (editBtn) { openEmployeeEdit(editBtn.dataset.id); return; }
+
+  // ——— تعطيل / تفعيل ———
+  // منعطّل بدل ما نحذف: الموظف مربوط بفواتيره (sold_by)، فالحذف بيضيّع
+  // معرفة مين باع بكل تاريخه. التعطيل بيوقفه عن الدخول والتاريخ بيضل كامل.
+  const togBtn = e.target.closest('.toggle-employee-btn');
+  if (togBtn) {
+    const off = togBtn.dataset.off === '1';
+    const name = togBtn.dataset.username;
+    const msg = off
+      ? `تفعيل حساب "${name}" ليرجع يقدر يدخل؟`
+      : `تعطيل حساب "${name}"؟\n\n· ما رح يقدر يدخل للبرنامج\n· فواتيره وتاريخه بيضلوا محفوظين\n· بتقدر ترجّعه بأي وقت`;
+    if (!confirm(msg)) return;
+    const { error } = await supabase.from('profiles').update({ active: off }).eq('id', togBtn.dataset.id);
+    if (error) { alert('❌ ' + error.message); return; }
+    await supabase.from('activity_log').insert({
+      branch_id: activeBranchId, action_type: off ? 'employee_enabled' : 'employee_disabled',
+      description: (off ? 'تفعيل' : 'تعطيل') + ` حساب الموظف: ${name}`,
+      amount: 0, performed_by: currentProfile ? currentProfile.id : null,
+    });
+    await loadEmployees();
+    return;
+  }
+
   const btn = e.target.closest('.reset-password-btn');
   if (!btn) return;
   const newPassword = prompt(`كلمة السر الجديدة لـ "${btn.dataset.username}" (٦ أحرف/أرقام ع الأقل):`);
