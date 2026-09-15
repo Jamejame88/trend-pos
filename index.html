@@ -3428,21 +3428,26 @@ $('#checkout-btn').addEventListener('click', async () => {
 
   alert(`تمت عملية البيع بنجاح ✅\nالإجمالي: ${total.toFixed(0)}\nالباقي: ${change.toFixed(0)}`);
 
-  // الرقم المتسلسل للفاتورة (TREND-1001) - بينقرا بعد الإنشاء لأنه بينتولد بقاعدة البيانات
+  // رقم الفاتورة + حفظ رقم الزبون بطلب واحد بدل طلبين:
+  // التحديث بيرجّع invoice_no بنفس الرحلة (.select بعد update).
+  const waPhone = normalizePhoneForWa($('#customer-phone-input').value);
   let invoiceNoText = '';
   try {
-    const { data: saleRow } = await supabase.from('sales').select('invoice_no').eq('id', saleId).maybeSingle();
+    const q = waPhone
+      ? supabase.from('sales').update({ customer_phone: waPhone }).eq('id', saleId).select('invoice_no').maybeSingle()
+      : supabase.from('sales').select('invoice_no').eq('id', saleId).maybeSingle();
+    const { data: saleRow } = await q;
     invoiceNoText = formatInvoiceNo(saleRow && saleRow.invoice_no);
   } catch (e) { console.error('تعذر قراءة رقم الفاتورة:', e); }
 
-  // حفظ رقم الزبون بالفاتورة + فتح واتساب تلقائيًا (بس إذا الكاشير كتب رقم)
-  const waPhone = normalizePhoneForWa($('#customer-phone-input').value);
   if (waPhone) {
-    const { error: phoneErr } = await supabase.from('sales').update({ customer_phone: waPhone }).eq('id', saleId);
-    if (phoneErr) console.error('تعذر حفظ رقم الزبون بالفاتورة:', phoneErr.message);
-    // نقاط هاي الفاتورة + الرصيد الجديد - بينضافوا لنص الفاتورة
-    const earned = await awardPointsForSale(waPhone, saleId, total);
-    const newBalance = pointsConfig.active ? await fetchBalance(waPhone) : 0;
+    // النقاط والرصيد بالتوازي: منجيب الرصيد القديم ومنضيف عليه المكسوب،
+    // بدل ما ننتظر الإضافة ثم نعيد قراءة الرصيد (رحلتين متسلسلتين).
+    const [earned, prevBalance] = await Promise.all([
+      awardPointsForSale(waPhone, saleId, total),
+      pointsConfig.active ? fetchBalance(waPhone) : Promise.resolve(0),
+    ]);
+    const newBalance = prevBalance + earned;
     const waText = buildWhatsAppInvoiceText({
       date: new Date().toLocaleString('ar'),
       items: cart.map(i => ({ name: i.name, qty: i.qty, subtotal: i.subtotal })),
@@ -3479,9 +3484,23 @@ $('#checkout-btn').addEventListener('click', async () => {
   if ($('#customer-points-info')) $('#customer-points-info').style.display = 'none';
   cpiPhone = null;
   renderCart();
-  await loadProducts();
-  await loadTodaySoldItems();
-  if (currentProfile.role === 'owner') { await loadSalesHistory(); await loadDebts(); await loadCustomers(); }
+
+  // ═══ التحديثات بالخلفية - الكاشير ما بينتظرها ═══
+  // قبل هيك كانت 5 استعلامات متسلسلة بتنفّذ قبل ما يخلص البيع، وفيها
+  // loadCustomers يلي بتسحب آلاف أسطر النقاط بعد كل بيعة حتى لو تبويبها مسكّر.
+  (async () => {
+    try {
+      await loadProducts();                 // المخزون - لازم يتحدث بالشاشة
+      await loadTodaySoldItems();
+      if (currentProfile.role === 'owner') {
+        // بس التبويبات المفتوحة فعلًا - الباقي بيتحدث لما يفتحها
+        if (tabsLoaded.history)   await loadSalesHistory();
+        if (tabsLoaded.debts)     await loadDebts();
+        if (tabsLoaded.customers) await loadCustomers();
+        if (tabsLoaded.points)    await loadPointsLedger();
+      }
+    } catch (e) { console.error('تحديث بالخلفية:', e); }
+  })();
 
   } finally {
     // بيتنفّذ دايمًا (نجاح، خطأ، أو أي return بنص العملية) - الزر ما بيضل معطّل لو صار خطأ
