@@ -1238,7 +1238,7 @@
           </div>
         </div>
         <button class="btn" id="add-employee-btn">💾 إنشاء الحساب</button>
-        <div id="employee-status" style="margin-top:8px; font-size:13px;"></div>
+        <div id="employee-status" style="margin-top:8px; font-size:13px; white-space:pre-line;"></div>
       </div>
       <div class="card" id="emp-edit-card" style="display:none; border:2px solid var(--green);">
         <h2>✏ تعديل: <span id="emp-edit-username"></span></h2>
@@ -6444,6 +6444,27 @@ function renderEmployees() {
   }).join('') || '<tr><td colspan="5">لا يوجد موظفين بعد</td></tr>';
 }
 
+/* بيستخرج رسالة الخطأ الحقيقية من رد الدالة الوسيطة.
+   invoke() بيرجّع خطأ عام ("non-2xx status code") والرسالة المفيدة
+   بتكون بجسم الرد - فما تظهر للمستخدم بدون هالقراءة. */
+async function fnErrorMessage(error, data) {
+  if (data && data.message) return data.message;
+  try {
+    if (error && error.context && typeof error.context.json === 'function') {
+      const body = await error.context.json();
+      if (body && (body.message || body.error)) return body.message || body.error;
+    }
+    if (error && error.context && typeof error.context.text === 'function') {
+      const txt = await error.context.text();
+      if (txt) {
+        try { const j = JSON.parse(txt); if (j.message || j.error) return j.message || j.error; }
+        catch (e) { return txt.slice(0, 200); }
+      }
+    }
+  } catch (e) { /* ما قدرنا نقرا الجسم - منرجع الرسالة العامة */ }
+  return (error && error.message) || 'خطأ غير معروف';
+}
+
 $('#add-employee-btn').addEventListener('click', async () => {
   const username = $('#emp-username').value.trim();
   const full_name = $('#emp-fullname').value.trim();
@@ -6462,8 +6483,21 @@ $('#add-employee-btn').addEventListener('click', async () => {
     const { data, error } = await supabase.functions.invoke('manage-employees', {
       body: { action: 'create_employee', username, password, full_name, role, branch_id },
     });
-    if (error) { statusEl.textContent = '❌ خطأ بالاتصال: ' + error.message; return; }
-    if (!data || !data.ok) { statusEl.textContent = '❌ ' + ((data && data.message) || 'فشل إنشاء الحساب'); return; }
+    if (error || !data || !data.ok) {
+      const msg = await fnErrorMessage(error, data);
+      statusEl.style.color = 'var(--red)';
+      statusEl.textContent = '❌ ' + msg;
+      // تلميحات للأسباب الأشيع
+      if (/exist|duplicate|already/i.test(msg)) {
+        statusEl.textContent += '\n(الاسم مستخدم من قبل - جرّب اسم تاني)';
+      } else if (/password/i.test(msg)) {
+        statusEl.textContent += '\n(كلمة السر لازم ٦ أحرف/أرقام ع الأقل)';
+      } else if (/SERVICE_ROLE|env|secret/i.test(msg)) {
+        statusEl.textContent += '\n(الدالة ناقصها Secret باسم SUPABASE_SERVICE_ROLE_KEY)';
+      }
+      return;
+    }
+    statusEl.style.color = '';
 
     statusEl.textContent = `✅ تم إنشاء حساب "${username}" بنجاح - عطيه اسم المستخدم وكلمة السر يستخدمهم لدخول نقطة البيع.`;
     $('#emp-username').value = '';
@@ -6575,8 +6609,10 @@ $('#employees-list').addEventListener('click', async (e) => {
   const { data, error } = await supabase.functions.invoke('manage-employees', {
     body: { action: 'reset_password', user_id: btn.dataset.id, new_password: newPassword },
   });
-  if (error) { alert('❌ خطأ بالاتصال: ' + error.message); return; }
-  if (!data || !data.ok) { alert('❌ ' + ((data && data.message) || 'فشل تغيير كلمة السر')); return; }
+  if (error || !data || !data.ok) {
+    alert('❌ ' + await fnErrorMessage(error, data));
+    return;
+  }
   alert(`✅ تم تغيير كلمة سر "${btn.dataset.username}" بنجاح`);
 });
 
