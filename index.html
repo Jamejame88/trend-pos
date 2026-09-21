@@ -447,8 +447,8 @@
           <div style="font-size:12px; color:var(--muted); margin-bottom:6px;">⚠ الأصناف التالية ما انطابقت مع منتج موجود بالاسم - اختار المنتج الصحيح لإضافتها للسلة:</div>
           <div id="sale-invoice-unmatched-list"></div>
         </div>
-        <div style="margin-top:8px; font-size:12px;">
-          <label>تاريخ الفاتورة (اختياري - لو الفاتورة قديمة/متأخرة عن اليوم):</label>
+        <div class="owner-only" style="margin-top:8px; font-size:12px;">
+          <label>تاريخ الفاتورة (اختياري - لو الفاتورة قديمة/متأخرة عن اليوم) — لصاحب المحل فقط:</label>
           <input type="datetime-local" id="sale-custom-date-input" style="width:100%; padding:6px; border-radius:8px; border:1px solid var(--border); margin-top:4px;">
         </div>
       </div>
@@ -609,6 +609,7 @@
         <p id="invoice-currency-hint" style="display:none; font-size:12px; color:var(--muted); margin-top:-4px; margin-bottom:8px;"></p>
         <input type="file" id="invoice-file-input" accept="image/*" capture="environment" style="margin-bottom:10px;">
         <button type="button" class="btn" id="invoice-analyze-btn">🤖 تحليل الفاتورة</button>
+        <button type="button" class="btn secondary" id="invoice-manual-btn">✍️ فاتورة يدوية</button>
         <div id="invoice-status" style="margin-top:8px; font-size:13px;"></div>
 
         <div id="invoice-review-wrap" style="display:none; margin-top:14px;">
@@ -3383,7 +3384,7 @@ $('#checkout-btn').addEventListener('click', async () => {
         sold_by: currentProfile.id,
         customerName: customerName ? customerName.trim() : null,
         customerPhone: customerPhone ? customerPhone.trim() : null,
-        customDateVal: $('#sale-custom-date-input').value || null,
+        customDateVal: (currentProfile && currentProfile.role === 'owner') ? ($('#sale-custom-date-input').value || null) : null,
         waPhone: normalizePhoneForWa($('#customer-phone-input').value),
         queued_at: new Date().toISOString(),
       });
@@ -3403,8 +3404,10 @@ $('#checkout-btn').addEventListener('click', async () => {
     return;
   }
 
-  // إذا الكاشير حدد تاريخ/وقت مختلف عن الآن (فاتورة متأخرة/قديمة)، نعدّل تاريخ الفاتورة بعد إنشائها
-  const customDateVal = $('#sale-custom-date-input').value;
+  // إذا صاحب المحل حدد تاريخ/وقت مختلف عن الآن (فاتورة متأخرة/قديمة)، نعدّل تاريخ الفاتورة بعد إنشائها.
+  // محصور بصاحب المحل: بيع بتاريخ قديم من موظف ممكن يخفي مبلغ من صندوق يوم انسكّر حسابه.
+  const customDateVal = (currentProfile && currentProfile.role === 'owner')
+    ? $('#sale-custom-date-input').value : '';
   if (customDateVal) {
     const { error: dateErr } = await supabase.from('sales')
       .update({ sale_date: new Date(customDateVal).toISOString() })
@@ -6938,6 +6941,23 @@ $('#invoice-review-list').addEventListener('click', (e) => {
       renderInvoiceRows();
     }
   }
+});
+
+// فاتورة توريد يدوية: نفس جدول المراجعة ونفس الحفظ تبع الفاتورة المحللة بالذكاء الاصطناعي،
+// بس بيبلّش فاضي والأسطر بتنكتب باليد. ما في أي منطق حفظ جديد.
+$('#invoice-manual-btn').addEventListener('click', () => {
+  const hasRows = invoiceItems.some(it => (it.name || '').trim());
+  if (hasRows && !confirm('في فاتورة مفتوحة بالجدول. بدك تمسحها وتبلّش فاتورة يدوية جديدة؟')) return;
+  invoiceItems = [{ name: '', category: '', qty: 1, cost: 0, sell: 0, existingId: null }];
+  renderInvoiceRows();
+  $('#invoice-review-wrap').style.display = 'block';
+  /* تنبيه العملة: بالفاتورة اليدوية الأرقام بتنحفظ متل ما بتنكتب بالضبط.
+     وضع "حوّلها لليرة الآن" بيحوّل بس الأسعار يلي بيقراها الذكاء الاصطناعي. */
+  const mode = getInvoiceCurrencyMode();
+  $('#invoice-status').style.color = 'var(--muted)';
+  $('#invoice-status').textContent = mode === 'tag'
+    ? '✍️ فاتورة يدوية — اكتب أسعار الشراء والبيع بالدولار'
+    : '✍️ فاتورة يدوية — اكتب أسعار الشراء والبيع بالليرة السورية';
 });
 
 $('#invoice-add-row-btn').addEventListener('click', () => {
