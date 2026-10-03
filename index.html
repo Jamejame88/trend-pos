@@ -615,7 +615,7 @@
         <div id="invoice-review-wrap" style="display:none; margin-top:14px;">
           <div style="overflow-x:auto;">
             <table>
-              <thead><tr><th>الاسم</th><th>التصنيف</th><th>الكمية</th><th>سعر الشراء</th><th>سعر البيع</th><th></th></tr></thead>
+              <thead><tr><th>الاسم</th><th>التصنيف</th><th>الكمية</th><th>سعر الشراء <span class="inv-cur-lbl"></span></th><th>سعر البيع <span class="inv-cur-lbl"></span></th><th></th></tr></thead>
               <tbody id="invoice-review-list"></tbody>
             </table>
           </div>
@@ -1284,6 +1284,54 @@
       </div>
       <div id="settings-content" style="display:none;">
         <div class="card">
+          <h2>📦 نقل أصناف مختارة لفرع تاني</h2>
+          <p style="font-size:13px; color:var(--muted); margin-top:0;">
+            لتوزيع المخزون وقت افتتاح فرع جديد. بتختار الأصناف وكم قطعة من كل وحدة.
+            الصنف الموجود بالفرع الهدف بتنضاف الكمية لسطره (والكلفة بتنحسب متوسط مرجّح)،
+            وغير الموجود بينعمل له سطر جديد بنفس السعر والعملة.
+            <b>الصنف ما بينحذف من هون</b> حتى لو انتقلت كل كميته - بيضل بكمية صفر.
+          </p>
+          <div class="form-grid">
+            <div class="field">
+              <label>انقل من "<span id="xfer-from-name">-</span>" إلى:</label>
+              <select id="xfer-target-branch"></select>
+            </div>
+            <div class="field">
+              <label>التصنيف:</label>
+              <select id="xfer-category"><option value="">كل التصنيفات</option></select>
+            </div>
+          </div>
+          <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:8px 0;">
+            <input type="text" id="xfer-search" placeholder="🔍 دوّر باسم الصنف"
+                   style="flex:1; min-width:160px; padding:7px; border-radius:8px; border:1px solid var(--border);">
+            <label style="display:flex; align-items:center; gap:5px; font-size:13px;">
+              <input type="checkbox" id="xfer-slow-only"> الراكدة بس
+            </label>
+            <input type="number" id="xfer-slow-days" value="60" min="7" title="عدد أيام الركود"
+                   style="width:70px; padding:7px; border-radius:8px; border:1px solid var(--border);">
+            <span id="xfer-slow-status" style="font-size:12px; color:var(--muted);"></span>
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+            <button type="button" class="btn secondary tiny" id="xfer-pick-all">✔ اختار كل المعروض (نص الكمية)</button>
+            <button type="button" class="btn secondary tiny" id="xfer-clear">✖ فضّي الاختيار</button>
+          </div>
+          <div id="xfer-summary" style="padding:9px 12px; border:1px solid var(--border); border-radius:8px;
+               background:var(--bg2, #fafafa); font-size:13px; margin-bottom:8px;">ما اخترت أي صنف بعد</div>
+          <div id="xfer-warn" style="font-size:12px; color:var(--orange); margin-bottom:8px;"></div>
+          <div style="overflow:auto; max-height:420px; border:1px solid var(--border); border-radius:8px;">
+            <table>
+              <thead><tr>
+                <th style="width:34px;"></th><th>الصنف</th><th>التصنيف</th>
+                <th>متوفر</th><th>ينتقل</th><th>بالفرع الهدف</th>
+              </tr></thead>
+              <tbody id="xfer-list"></tbody>
+            </table>
+          </div>
+          <button type="button" class="btn block" id="xfer-apply-btn" style="margin-top:10px;">📦 نقل الأصناف المختارة</button>
+          <div id="xfer-status" style="margin-top:8px; font-size:13px; white-space:pre-line;"></div>
+          <div id="xfer-report" style="margin-top:8px; font-size:12.5px; line-height:1.9;"></div>
+        </div>
+        <div class="card">
           <h2>🔀 نقل كل منتجات هاد الفرع لفرع تاني</h2>
           <p style="font-size:13px; color:var(--muted); margin-top:0;">مفيد وقت إغلاق فرع ودمجه بفرع تاني عشان يصير محل واحد - بينقل كل المنتجات (بكمياتها وأسعارها) للفرع المختار، ويفضى هاد الفرع منها.</p>
           <div class="form-grid">
@@ -1447,6 +1495,7 @@
 
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <script type="module">
+// نسخة: 2026.10.03-d (إصلاح خلط العملة + نقل أصناف مختارة لفرع تاني)
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 // ============================================================
@@ -1548,7 +1597,10 @@ $('#branch-picker').addEventListener('change', async (e) => {
 });
 
 // ---------------- نقل منتجات بين الفروع (صاحب المحل) ----------------
-function renderMoveBranchPicker() {
+async function renderMoveBranchPicker() {
+  renderXferBranchPicker();
+  await loadXferTargetProducts();
+  renderXferList();
   const targetSelect = $('#move-target-branch');
   if (!targetSelect) return;
   const others = branches.filter(b => b.id !== activeBranchId);
@@ -1557,6 +1609,309 @@ function renderMoveBranchPicker() {
   $('#move-from-branch-name').textContent = currentBranchName;
   if ($('#sync-branch-name')) $('#sync-branch-name').textContent = currentBranchName;
 }
+
+// ================= نقل أصناف مختارة لفرع تاني =================
+// الفرق عن "نقل كل المنتجات" تحت: هداك بينقل سطر المنتج نفسه (بيفضّي الفرع - لإغلاق فرع ودمجه)،
+// وهاد بينقل كميات مختارة (بيخلي الصنف موجود بالفرعين - لافتتاح فرع وتوزيع المخزون).
+let xferTargetProducts = [];     // منتجات الفرع الهدف (للدمج بالاسم ومقارنة الأسعار)
+let xferSel = {};                // productId -> الكمية المختارة للنقل
+let xferSoldIds = null;          // Set لمعرفات الأصناف يلي انباعت خلال مدة الركود (null = ما انحسبت)
+
+function xferTargetId() { return ($('#xfer-target-branch') || {}).value || ''; }
+
+// الصنف المقابل بالفرع الهدف - نفس منطق منع التكرار المستعمل بالفواتير
+function xferMatchInTarget(p) {
+  const n = normalizeProductName(p.name);
+  return xferTargetProducts.find(t => normalizeProductName(t.name) === n) || null;
+}
+
+async function loadXferTargetProducts() {
+  const tid = xferTargetId();
+  xferTargetProducts = [];
+  if (!tid) return;
+  const { data, error } = await supabase.from('products').select('*').eq('branch_id', tid);
+  if (error) { $('#xfer-status').textContent = '⚠ تعذّر قراءة منتجات الفرع الهدف: ' + error.message; return; }
+  xferTargetProducts = data || [];
+}
+
+function renderXferBranchPicker() {
+  const sel = $('#xfer-target-branch');
+  if (!sel) return;
+  const others = (branches || []).filter(b => b.id !== activeBranchId);
+  const keep = sel.value;
+  sel.innerHTML = others.map(b => `<option value="${escapeAttr(b.id)}">${escapeHtml(b.name)}</option>`).join('')
+    || '<option value="">لا يوجد فرع تاني</option>';
+  if (keep && others.some(b => b.id === keep)) sel.value = keep;
+  const from = (branches || []).find(b => b.id === activeBranchId);
+  $('#xfer-from-name').textContent = from ? from.name : '-';
+
+  const cats = [...new Set((productsCache || []).map(p => (p.category || '').trim()).filter(Boolean))].sort();
+  const catSel = $('#xfer-category');
+  const keepCat = catSel.value;
+  catSel.innerHTML = '<option value="">كل التصنيفات</option>' +
+    cats.map(c => `<option value="${escapeAttr(c)}">${escapeHtml(c)}</option>`).join('');
+  if (keepCat && cats.includes(keepCat)) catSel.value = keepCat;
+}
+
+function xferVisibleProducts() {
+  const q = normalizeProductName(($('#xfer-search').value || '').trim());
+  const cat = $('#xfer-category').value;
+  const slowOnly = $('#xfer-slow-only').checked;
+  return (productsCache || []).filter((p) => {
+    if (Number(p.quantity) <= 0) return false;                       // ما في شي ننقله
+    if (cat && (p.category || '').trim() !== cat) return false;
+    if (q && !normalizeProductName(p.name).includes(q)) return false;
+    if (slowOnly && xferSoldIds && xferSoldIds.has(p.id)) return false;
+    return true;
+  }).sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+}
+
+function renderXferSummary() {
+  const ids = Object.keys(xferSel).filter(id => xferSel[id] > 0);
+  const box = $('#xfer-summary');
+  if (!ids.length) { box.textContent = 'ما اخترت أي صنف بعد'; $('#xfer-warn').innerHTML = ''; return; }
+  let pieces = 0, value = 0;
+  const priceDiff = [];
+  ids.forEach((id) => {
+    const p = productsCache.find(x => x.id === id);
+    if (!p) return;
+    const qty = xferSel[id];
+    pieces += qty;
+    value += productCost(p) * qty;
+    const t = xferMatchInTarget(p);
+    // فرق أكتر من 5% بسعر البيع بين الفرعين - منبّه مو مانع
+    if (t && Math.abs(productSell(t) - productSell(p)) > productSell(p) * 0.05) {
+      priceDiff.push(`${p.name} (هون ${productSell(p).toFixed(0)} / هناك ${productSell(t).toFixed(0)})`);
+    }
+  });
+  box.innerHTML = `<b>${ids.length}</b> صنف · <b>${pieces}</b> قطعة · قيمتها بسعر الشراء <b>${value.toFixed(0)}</b> ل.س`;
+  $('#xfer-warn').innerHTML = priceDiff.length
+    ? `⚠ ${priceDiff.length} صنف سعر بيعه بالفرع الهدف مختلف - سعر الفرع الهدف هو يلي بيضل شغّال:<br>${priceDiff.map(escapeHtml).join('<br>')}`
+    : '';
+}
+
+function renderXferList() {
+  const rows = xferVisibleProducts();
+  $('#xfer-list').innerHTML = rows.map((p) => {
+    const sel = xferSel[p.id] || 0;
+    const t = xferMatchInTarget(p);
+    const tgtNote = !xferTargetId() ? '-'
+      : (t ? `<span style="color:var(--muted);">موجود · ${t.quantity} قطعة</span>`
+           : '<span style="color:var(--green);">صنف جديد</span>');
+    return `<tr>
+      <td><input type="checkbox" class="xfer-chk" data-id="${escapeAttr(p.id)}" ${sel > 0 ? 'checked' : ''}></td>
+      <td>${escapeHtml(p.name)}</td>
+      <td style="color:var(--muted);">${escapeHtml(p.category || '-')}</td>
+      <td>${p.quantity}</td>
+      <td style="white-space:nowrap;">
+        <input type="number" class="xfer-qty" data-id="${escapeAttr(p.id)}" min="0" max="${p.quantity}"
+               value="${sel}" style="width:62px;">
+        <button type="button" class="btn tiny secondary xfer-all" data-id="${escapeAttr(p.id)}"
+                style="padding:1px 6px;">الكل</button>
+      </td>
+      <td>${tgtNote}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="6" class="empty">ما في أصناف مطابقة</td></tr>';
+  renderXferSummary();
+}
+
+// ——— أحداث الاختيار ———
+$('#xfer-list')?.addEventListener('change', (e) => {
+  const id = e.target.dataset.id;
+  if (!id) return;
+  const p = productsCache.find(x => x.id === id);
+  if (!p) return;
+  if (e.target.classList.contains('xfer-chk')) {
+    if (e.target.checked) xferSel[id] = xferSel[id] > 0 ? xferSel[id] : Number(p.quantity);
+    else delete xferSel[id];
+    renderXferList();
+  } else if (e.target.classList.contains('xfer-qty')) {
+    const v = Math.max(0, Math.min(Number(p.quantity), parseInt(e.target.value, 10) || 0));
+    if (v > 0) xferSel[id] = v; else delete xferSel[id];
+    e.target.value = v;
+    const chk = document.querySelector(`.xfer-chk[data-id="${CSS.escape(id)}"]`);
+    if (chk) chk.checked = v > 0;
+    renderXferSummary();
+  }
+});
+$('#xfer-list')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('.xfer-all');
+  if (!btn) return;
+  const p = productsCache.find(x => x.id === btn.dataset.id);
+  if (!p) return;
+  xferSel[p.id] = Number(p.quantity);
+  renderXferList();
+});
+$('#xfer-search')?.addEventListener('input', renderXferList);
+$('#xfer-category')?.addEventListener('change', renderXferList);
+$('#xfer-target-branch')?.addEventListener('change', async () => {
+  $('#xfer-status').textContent = '⏳ عم يقرا منتجات الفرع الهدف...';
+  await loadXferTargetProducts();
+  $('#xfer-status').textContent = '';
+  renderXferList();
+});
+$('#xfer-pick-all')?.addEventListener('click', () => {
+  // نص الكمية هو التوزيع الأكثر منطقية لافتتاح فرع - وبيضل قابل للتعديل سطر سطر
+  xferVisibleProducts().forEach((p) => {
+    const half = Math.floor(Number(p.quantity) / 2);
+    if (half > 0) xferSel[p.id] = half;
+  });
+  renderXferList();
+});
+$('#xfer-clear')?.addEventListener('click', () => { xferSel = {}; renderXferList(); });
+
+// فلتر الركود - بيحسب الأصناف يلي انباعت خلال المدة، والباقي هو الراكد
+$('#xfer-slow-only')?.addEventListener('change', async () => {
+  const on = $('#xfer-slow-only').checked;
+  const st = $('#xfer-slow-status');
+  if (!on) { st.textContent = ''; renderXferList(); return; }
+  const days = Math.max(7, parseInt($('#xfer-slow-days').value, 10) || 60);
+  st.textContent = '⏳ عم يحسب...';
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+  const { data, error } = await supabase
+    .from('sale_items')
+    .select('product_id, sales!inner(branch_id, status, sale_date)')
+    .eq('sales.branch_id', activeBranchId).eq('sales.status', 'completed')
+    .gte('sales.sale_date', since);
+  if (error) { st.textContent = '❌ ' + error.message; $('#xfer-slow-only').checked = false; return; }
+  xferSoldIds = new Set((data || []).map(r => r.product_id).filter(Boolean));
+  st.textContent = `ما انباع من ${days} يوم`;
+  renderXferList();
+});
+$('#xfer-slow-days')?.addEventListener('change', () => {
+  if ($('#xfer-slow-only').checked) { xferSoldIds = null; $('#xfer-slow-only').checked = false; $('#xfer-slow-status').textContent = ''; renderXferList(); }
+});
+
+// ——— التنفيذ ———
+// كل صنف بينتقل بخطوتين: نقص من المصدر ثم زيادة بالهدف. ما في معاملة واحدة من المتصفح،
+// فمنستعمل "قارن ثم بدّل": منقرا الكمية الحالية ومنكتب بشرط إنها ما تغيّرت. هيك بيعة
+// صارت بنفس اللحظة ما بتنمسح. ولو فشلت خطوة الهدف، منرجّع الكمية للمصدر فورًا.
+async function xferApplyOne(p, qty, targetId, rate) {
+  const tgt = xferMatchInTarget(p);
+  const srcIsUsd = p.price_currency === 'usd';
+  const tgtIsUsd = tgt ? tgt.price_currency === 'usd' : srcIsUsd;
+  if ((srcIsUsd || tgtIsUsd) && !(rate > 0)) {
+    return { ok: false, msg: 'ما في سعر صرف محفوظ وهاد الصنف مسعّر بالدولار' };
+  }
+
+  // 1) نقص من المصدر بشرط إنه الكمية ما تغيّرت
+  const { data: fresh, error: readErr } = await supabase
+    .from('products').select('quantity').eq('id', p.id).maybeSingle();
+  if (readErr || !fresh) return { ok: false, msg: 'تعذّر قراءة الكمية الحالية' };
+  const nowQty = Number(fresh.quantity) || 0;
+  if (nowQty < qty) return { ok: false, msg: `الكمية المتوفرة صارت ${nowQty} بس` };
+
+  const { data: decRows, error: decErr } = await supabase.from('products')
+    .update({ quantity: nowQty - qty }).eq('id', p.id).eq('quantity', nowQty).select('id');
+  if (decErr) return { ok: false, msg: decErr.message };
+  if (!decRows || !decRows.length) return { ok: false, msg: 'الكمية تغيّرت أثناء النقل - أعد المحاولة' };
+
+  // 2) زيادة بالفرع الهدف
+  try {
+    if (tgt) {
+      const { data: tFresh, error: tReadErr } = await supabase
+        .from('products').select('quantity').eq('id', tgt.id).maybeSingle();
+      if (tReadErr || !tFresh) throw new Error('تعذّر قراءة الصنف بالفرع الهدف');
+      const tQty = Number(tFresh.quantity) || 0;
+      // المتوسط المرجّح بالليرة ثم الرجوع لعملة صنف الفرع الهدف
+      const srcCostSyp = productCost(p);
+      const tgtCostSyp = productCost(tgt);
+      const wAvgSyp = tQty > 0 ? ((tQty * tgtCostSyp) + (qty * srcCostSyp)) / (tQty + qty) : srcCostSyp;
+      const newCost = tgtIsUsd ? wAvgSyp / rate : wAvgSyp;
+      const { data: incRows, error: incErr } = await supabase.from('products')
+        .update({ quantity: tQty + qty, cost_price: newCost })   // سعر البيع تبع الفرع الهدف ما منلمسه
+        .eq('id', tgt.id).eq('quantity', tQty).select('id');
+      if (incErr) throw new Error(incErr.message);
+      if (!incRows || !incRows.length) throw new Error('كمية الصنف بالفرع الهدف تغيّرت - أعد المحاولة');
+      tgt.quantity = tQty + qty;
+      tgt.cost_price = newCost;
+    } else {
+      const { data: created, error: insErr } = await supabase.from('products').insert({
+        branch_id: targetId,
+        name: p.name,
+        category: p.category || null,
+        cost_price: p.cost_price,
+        sell_price: p.sell_price,
+        price_currency: p.price_currency || 'syp',
+        quantity: qty,
+        min_quantity: p.min_quantity != null ? p.min_quantity : 3,
+      }).select().single();
+      if (insErr) throw new Error(insErr.message);
+      if (created) xferTargetProducts.push(created);
+    }
+  } catch (err) {
+    // تراجع: منرجّع الكمية للمصدر حتى ما تضيع قطع من المخزون
+    const { error: rbErr } = await supabase.from('products')
+      .update({ quantity: nowQty }).eq('id', p.id).eq('quantity', nowQty - qty);
+    return { ok: false, msg: err.message + (rbErr ? ' — ⚠ وفشل التراجع كمان، راجع كمية الصنف يدويًا' : ' (انرجّعت الكمية)') };
+  }
+
+  p.quantity = nowQty - qty;
+  return { ok: true };
+}
+
+$('#xfer-apply-btn')?.addEventListener('click', async () => {
+  const targetId = xferTargetId();
+  const statusEl = $('#xfer-status');
+  const reportEl = $('#xfer-report');
+  reportEl.innerHTML = '';
+  if (!targetId) { statusEl.textContent = '⚠ ما في فرع هدف'; return; }
+
+  const picks = Object.keys(xferSel)
+    .map(id => ({ p: productsCache.find(x => x.id === id), qty: xferSel[id] }))
+    .filter(x => x.p && x.qty > 0);
+  if (!picks.length) { statusEl.textContent = '⚠ ما اخترت أي صنف'; return; }
+
+  const toName = ((branches || []).find(b => b.id === targetId) || {}).name || 'الفرع المختار';
+  const pieces = picks.reduce((s, x) => s + x.qty, 0);
+  const value = picks.reduce((s, x) => s + productCost(x.p) * x.qty, 0);
+  const newOnes = picks.filter(x => !xferMatchInTarget(x.p)).length;
+  if (!confirm(`نقل ${picks.length} صنف (${pieces} قطعة) إلى "${toName}"؟\n\n` +
+      `· ${newOnes} صنف رح ينعمل جديد هناك، و${picks.length - newOnes} رح تنضاف لأصناف موجودة\n` +
+      `· قيمتها بسعر الشراء: ${value.toFixed(0)} ل.س\n` +
+      `· الكميات بتنقص من "${$('#xfer-from-name').textContent}" وبتزيد هناك`)) return;
+
+  $('#xfer-apply-btn').disabled = true;
+  const rate = Number(CURRENT_USD_RATE) || 0;
+  const done = [], failed = [];
+  for (let i = 0; i < picks.length; i++) {
+    statusEl.textContent = `⏳ عم ينقل... (${i + 1} من ${picks.length}) - ${picks[i].p.name}`;
+    const r = await xferApplyOne(picks[i].p, picks[i].qty, targetId, rate);
+    if (r.ok) { done.push(picks[i]); delete xferSel[picks[i].p.id]; }
+    else failed.push({ name: picks[i].p.name, msg: r.msg });
+  }
+
+  // سجل للفرعين - حتى يبين النقل بسجل الحركات من الجهتين
+  if (done.length) {
+    const donePieces = done.reduce((s, x) => s + x.qty, 0);
+    const doneValue = done.reduce((s, x) => s + productCost(x.p) * x.qty, 0);
+    const names = done.slice(0, 8).map(x => `${x.p.name} (${x.qty})`).join('، ')
+      + (done.length > 8 ? ` و${done.length - 8} غيرهم` : '');
+    const fromName = $('#xfer-from-name').textContent;
+    await supabase.from('activity_log').insert([
+      { branch_id: activeBranchId, action_type: 'branch_transfer_out',
+        description: `نقل ${done.length} صنف (${donePieces} قطعة) إلى "${toName}": ${names}`,
+        amount: doneValue, performed_by: currentProfile ? currentProfile.id : null },
+      { branch_id: targetId, action_type: 'branch_transfer_in',
+        description: `استلام ${done.length} صنف (${donePieces} قطعة) من "${fromName}": ${names}`,
+        amount: doneValue, performed_by: currentProfile ? currentProfile.id : null },
+    ]);
+  }
+
+  statusEl.style.color = failed.length ? 'var(--orange)' : 'var(--green)';
+  statusEl.textContent = failed.length
+    ? `انتقل ${done.length} صنف، وفشل ${failed.length}`
+    : `✅ انتقل ${done.length} صنف (${done.reduce((s, x) => s + x.qty, 0)} قطعة) إلى "${toName}"`;
+  if (failed.length) {
+    reportEl.innerHTML = '<b style="color:var(--red);">الأصناف يلي ما انتقلت:</b><br>' +
+      failed.map(f => `• ${escapeHtml(f.name)} — ${escapeHtml(f.msg)}`).join('<br>');
+  }
+  $('#xfer-apply-btn').disabled = false;
+  await loadProducts();
+  await loadXferTargetProducts();
+  renderXferList();
+  if (typeof loadActivityLog === 'function') await loadActivityLog();
+});
 
 function renderEmployeeBranchPicker() {
   const sel = $('#emp-branch');
@@ -6719,10 +7074,18 @@ const INVOICE_RATE_KEY = 'pos_invoice_usd_rate';
       hintEl.textContent = 'الأسعار يلي بيقراها الذكاء الاصطناعي من صورة الفاتورة رح تنحوّل تلقائيًا لليرة السورية حسب سعر الصرف يلي حاطّه فوق (سعر ثابت لهاي الفاتورة بس)، قبل ما تظهر بجدول المراجعة تحت.';
     }
   }
-  $('#invoice-currency-syp').addEventListener('change', syncVisibility);
-  $('#invoice-currency-usd').addEventListener('change', syncVisibility);
-  $('#invoice-usd-mode-convert').addEventListener('change', syncVisibility);
-  $('#invoice-usd-mode-tag').addEventListener('change', syncVisibility);
+  function onCurrencyChange() {
+    syncVisibility();
+    // الجدول معروض؟ لازم نعيد حساب أسعار البيع ونبدّل وحدة العملة بالترويسة
+    if (invoiceItems.length && $('#invoice-review-wrap').style.display !== 'none') {
+      reprefillInvoiceSellPrices();
+      renderInvoiceRows();
+    }
+  }
+  $('#invoice-currency-syp').addEventListener('change', onCurrencyChange);
+  $('#invoice-currency-usd').addEventListener('change', onCurrencyChange);
+  $('#invoice-usd-mode-convert').addEventListener('change', onCurrencyChange);
+  $('#invoice-usd-mode-tag').addEventListener('change', onCurrencyChange);
   rateInput.addEventListener('input', () => {
     try { localStorage.setItem(INVOICE_RATE_KEY, rateInput.value || ''); } catch (e) { /* تجاهل */ }
   });
@@ -6733,6 +7096,22 @@ const INVOICE_RATE_KEY = 'pos_invoice_usd_rate';
 function getInvoiceCurrencyMode() {
   if (!$('#invoice-currency-usd').checked) return 'syp';
   return $('#invoice-usd-mode-tag').checked ? 'tag' : 'convert';
+}
+// ——— تحويل عملة أسعار جدول مراجعة الفاتورة ———
+// جدول المراجعة عنده عملة وحدة: بوضع "تعليم مستمر" كل أرقامه بالدولار، وغير هيك كلها بالليرة.
+// أما كل منتج بقاعدة البيانات فعنده عملته الخاصة. هالدالتين هنّ الجسر بين الاتنين،
+// وبدونهم بينحفظ رقم بليرة تحت راية "دولار" (أو العكس) فيطلع السعر مضروب/مقسوم على سعر الصرف.
+function invoiceRowToSyp(v, tagAsUsd) {
+  const n = Number(v) || 0;
+  if (!tagAsUsd) return n;                       // الجدول أصلًا بالليرة
+  const r = Number(CURRENT_USD_RATE) || 0;
+  return r > 0 ? n * r : n;
+}
+function sypToProductCurrency(sypVal, cur) {
+  const n = Number(sypVal) || 0;
+  if (cur !== 'usd') return n;
+  const r = Number(CURRENT_USD_RATE) || 0;
+  return r > 0 ? n / r : n;
 }
 function getInvoiceUsdRateIfSelected() {
   // بترجع سعر الصرف بس بوضع "تحويل فوري" - وإلا null (يعني ليرة أو وضع "تعليم مستمر"، ما في تحويل فوري)
@@ -6803,7 +7182,14 @@ $('#invoice-analyze-btn').addEventListener('click', async () => {
       if (usdRate) cost = Math.round(cost * usdRate);
       let sell;
       if (existing) {
-        sell = isTagUsd ? Number(existing.sell_price) : productSell(existing);
+        // لازم يكون بعملة الجدول. المنتج ممكن يكون مسجّل بليرة والجدول بالدولار (أو العكس)،
+        // وقبل هيك كنا نحط رقم الليرة متل ما هو بجدول دولار - وهي أصل المشكلة.
+        sell = isTagUsd
+          ? (existing.price_currency === 'usd'
+              ? Number(existing.sell_price)
+              : sypToProductCurrency(productSell(existing), 'usd'))
+          : productSell(existing);
+        sell = isTagUsd ? Math.round(sell * 100) / 100 : Math.round(sell);
       } else {
         sell = isTagUsd ? Math.round(cost * 1.2 * 100) / 100 : Math.round(cost * 1.2);
       }
@@ -6883,7 +7269,41 @@ function computeAndRenderSuggestion(idx) {
   `;
 }
 
+// بيشرح للمستخدم شو رح يصير بالسطر لما تكون عملة المنتج غير عملة الجدول
+function invoiceRowCurrencyNote(it, tagAsUsd) {
+  if (!it.existingId) return '';
+  const p = productsCache.find(x => x.id === it.existingId);
+  if (!p) return '';
+  const pIsUsd = p.price_currency === 'usd';
+  if (pIsUsd === tagAsUsd) return '';
+  const msg = tagAsUsd
+    ? 'مسجّل بالليرة ← رح يصير معلّم دولار (انحوّل سعره)'
+    : 'معلّم دولار - الرقم هون بالليرة وبيرجع للدولار عند الحفظ';
+  return `<div style="font-size:11px; color:var(--orange); margin-top:3px;">⇄ ${msg}</div>`;
+}
+
+// لما يبدّل المستخدم عملة الفاتورة بعد التحليل، أسعار البيع المقترحة للمنتجات الموجودة
+// لازم تتحوّل لعملة الجدول الجديدة - وإلا بيضلوا بالعملة القديمة بدون ما يبيّن.
+function reprefillInvoiceSellPrices() {
+  const tagAsUsd = getInvoiceCurrencyMode() === 'tag';
+  invoiceItems.forEach((it) => {
+    if (!it.existingId) return;
+    const p = productsCache.find(x => x.id === it.existingId);
+    if (!p) return;
+    const sellSyp = productSell(p);
+    it.sell = tagAsUsd
+      ? Math.round(sypToProductCurrency(sellSyp, 'usd') * 100) / 100
+      : Math.round(sellSyp);
+  });
+}
+
 function renderInvoiceRows() {
+  const tagAsUsdNow = getInvoiceCurrencyMode() === 'tag';
+  document.querySelectorAll('.inv-cur-lbl').forEach((el) => {
+    el.textContent = tagAsUsdNow ? '($)' : '(ل.س)';
+    el.style.color = 'var(--muted)';
+    el.style.fontWeight = 'normal';
+  });
   $('#invoice-review-list').innerHTML = invoiceItems.map((it, idx) => `
     <tr>
       <td>
@@ -6897,6 +7317,7 @@ function renderInvoiceRows() {
       <td>
         <button type="button" class="btn tiny danger inv-del" data-idx="${idx}">حذف</button>
         <div style="font-size:11px; color:var(--muted); margin-top:3px;">${it.existingId ? 'منتج موجود' : 'منتج جديد'}</div>
+        ${invoiceRowCurrencyNote(it, tagAsUsdNow)}
       </td>
     </tr>
   `).join('') || '<tr><td colspan="6" class="empty">لا يوجد أسطر - اضغط "+ إضافة سطر" لإضافة صنف يدويًا</td></tr>';
@@ -6977,6 +7398,19 @@ $('#invoice-commit-btn').addEventListener('click', async () => {
   // وضع "تعليم مستمر" (دولار): الأرقام يلي بجدول المراجعة أصلًا بالدولار - لازم نحط price_currency:'usd'
   // على المنتج (جديد أو موجود) حتى ينعرض/يتحدث صح حسب سعر الصرف المركزي، مش يتعامل معه كأنه ليرة.
   const tagAsUsd = getInvoiceCurrencyMode() === 'tag';
+
+  // أي تحويل بين ليرة ودولار لازمه سعر صرف. بدونه كنا منحفظ الرقم متل ما هو
+  // وبتطلع أسعار مضروبة بمئات - فأحسن نوقف ونخبّر بدل ما نخرّب المنتجات.
+  const rateNow = Number(CURRENT_USD_RATE) || 0;
+  const touchesUsd = tagAsUsd || validItems.some((it) => {
+    const p = it.existingId ? productsCache.find(x => x.id === it.existingId) : null;
+    return p && p.price_currency === 'usd';
+  });
+  if (touchesUsd && !(rateNow > 0)) {
+    statusEl.textContent = '⚠ ما في سعر صرف دولار محفوظ. حدّثه من كرت "💱 سعر صرف الدولار" قبل ما تستورد، وإلا الأسعار بتنحفظ غلط.';
+    return;
+  }
+
   statusEl.textContent = '⏳ عم يحفظ بالمخزون...';
   $('#invoice-commit-btn').disabled = true;
   try {
@@ -7000,21 +7434,26 @@ $('#invoice-commit-btn').addEventListener('click', async () => {
         const addQty = Number(it.qty) || 0;
         const updateFields = { quantity: oldQty + addQty };
 
-        if (updateCost) {
-          if (costMode === 'weighted' && oldQty > 0) {
-            // الحساب بالليرة ثم الرجوع لعملة المنتج - عشان ما ينكسر الربط بسعر الصرف
-            const rate = Number(CURRENT_USD_RATE) || 0;
-            const willBeUsd = tagAsUsd || existing.price_currency === 'usd';
-            const oldCostSyp = productCost(existing);
-            const newCostSyp = (tagAsUsd && rate > 0) ? Number(it.cost) * rate : Number(it.cost);
-            const wAvgSyp = ((oldQty * oldCostSyp) + (addQty * newCostSyp)) / (oldQty + addQty);
-            updateFields.cost_price = (willBeUsd && rate > 0) ? wAvgSyp / rate : wAvgSyp;
-          } else {
-            updateFields.cost_price = it.cost;   // مخزون صفر أو وضع "استبدال"
-          }
-        }
-        if (updateSell) updateFields.sell_price = it.sell;
-        if (tagAsUsd && (updateCost || updateSell)) updateFields.price_currency = 'usd';
+        // عملة المنتج بعد الحفظ: بوضع "تعليم مستمر" بيصير دولار، وغير هيك بيضل متل ما هو.
+        const oldCur = existing.price_currency === 'usd' ? 'usd' : 'syp';
+        const newCur = tagAsUsd ? 'usd' : oldCur;
+        const curChanged = newCur !== oldCur;
+
+        // كل الحساب بالليرة، وبالآخر منرجّع الرقم لعملة المنتج الجديدة.
+        // ولو العملة تبدّلت لازم نكتب السعرين سوا - ما ينفع نبدّل الراية ونترك سعر
+        // بالعملة القديمة تحتها (هي كانت المشكلة: سعر بيع بالليرة صار يتقرا دولار).
+        const rowCostSyp = invoiceRowToSyp(it.cost, tagAsUsd);
+        const newCostSyp = updateCost
+          ? ((costMode === 'weighted' && oldQty > 0)
+              ? ((oldQty * productCost(existing)) + (addQty * rowCostSyp)) / (oldQty + addQty)
+              : rowCostSyp)                              // مخزون صفر أو وضع "استبدال"
+          : productCost(existing);                       // وضع "لا تغيّره"
+        const newSellSyp = updateSell ? invoiceRowToSyp(it.sell, tagAsUsd) : productSell(existing);
+
+        if (updateCost || curChanged) updateFields.cost_price = sypToProductCurrency(newCostSyp, newCur);
+        if (updateSell || curChanged) updateFields.sell_price = sypToProductCurrency(newSellSyp, newCur);
+        if (curChanged) updateFields.price_currency = newCur;
+
         const { error } = await supabase.from('products').update(updateFields).eq('id', existing.id);
         if (error) throw error;
       } else {
