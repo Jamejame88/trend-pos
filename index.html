@@ -1532,7 +1532,7 @@
 
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <script type="module">
-// نسخة: 2026.10.04-f (كشف حركة صنف بالتاريخ والوقت والكاشير + نقل أصناف مختارة + إصلاح العملة)
+// نسخة: 2026.10.05-g (بيان حركة مقفل: رصيد افتتاحي + داخل/خارج + رصيد ختامي)
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 // ============================================================
@@ -5843,14 +5843,27 @@ function renderMovements() {
   const from = $('#mov-from').value ? new Date($('#mov-from').value + 'T00:00:00') : null;
   const to   = $('#mov-to').value   ? new Date($('#mov-to').value + 'T23:59:59') : null;
 
-  // الرصيد بينحسب من أول الحركات دايمًا - الفلترة بتخفي أسطر بس ما بتصفّر الرصيد
-  let bal = 0, shownIn = 0, shownOut = 0, shownValue = 0;
+  const totalIn  = movRows.reduce((s, r) => s + r.inQ, 0);
+  const totalOut = movRows.reduce((s, r) => s + r.outQ, 0);
+  const actual   = Number(movProduct.quantity) || 0;
+
+  // الرصيد الافتتاحي محسوب بالعكس: الكمية الحالية - الوارد + الصادر.
+  // هيك البيان بيقفل دايمًا وبينتهي عند الكمية الحالية بالضبط. وهو بيضم شغلتين:
+  // الكمية يلي بلّش فيها الصنف، وأي حركة مو مسجّلة مربوطة بالصنف (نقل، جرد، هدايا نقاط).
+  const opening = actual - totalIn + totalOut;
+
+  let bal = opening;
+  let periodOpening = opening;               // الرصيد أول المدة المختارة
+  let periodIn = 0, periodOut = 0;           // حركة المدة كلها (بغض النظر عن فلتر النوع)
+  let shownIn = 0, shownOut = 0, shownValue = 0;   // يلي ظاهر فعليًا بالجدول
+
   const html = movRows.map((r) => {
-    bal += r.inQ - r.outQ;                       // الرصيد تراكمي دايمًا، الفلاتر بتخفي أسطر بس
     const d = new Date(r.t);
-    if (from && d < from) return '';
-    if (to && d > to) return '';
-    if (movKind && !r.kind.startsWith(movKind)) return '';
+    if (from && d < from) { bal += r.inQ - r.outQ; periodOpening = bal; return ''; }
+    if (to && d > to) return '';   // بعد نهاية المدة - ما بتدخل بالرصيد الختامي للمدة
+    bal += r.inQ - r.outQ;
+    periodIn += r.inQ; periodOut += r.outQ;
+    if (movKind && !r.kind.startsWith(movKind)) return '';   // الفلتر بيخفي السطر بس، الرصيد بيضل صح
     shownIn += r.inQ; shownOut += r.outQ; shownValue += Number(r.total) || 0;
     return `<tr>
       <td style="white-space:nowrap;">${d.toLocaleDateString('ar')}
@@ -5866,25 +5879,44 @@ function renderMovements() {
     </tr>`;
   }).filter(Boolean).join('');
 
-  $('#mov-list').innerHTML = html || '<tr><td colspan="9" class="empty">ما في حركات بهاي الفترة</td></tr>';
+  const closing = bal;                        // لازم يساوي الكمية الحالية لما ما في فلتر "إلى"
+  const openLabel = from ? 'رصيد أول المدة' : 'رصيد افتتاحي';
+  const openRow = `<tr style="background:#f3f6f9;">
+      <td style="white-space:nowrap;">${from ? $('#mov-from').value : 'البداية'}</td>
+      <td><b>${openLabel}</b></td>
+      <td></td><td></td>
+      <td><b>${periodOpening}</b></td>
+      <td>-</td><td>-</td><td>-</td>
+      <td style="color:var(--muted);">${from ? 'الرصيد قبل بداية المدة' : 'كمية البداية + حركات غير مسجّلة'}</td>
+    </tr>`;
+  const closeRow = `<tr style="background:#eef5ef;">
+      <td style="white-space:nowrap;">${to ? $('#mov-to').value : 'اليوم'}</td>
+      <td><b>${to ? 'رصيد آخر المدة' : 'الرصيد الحالي'}</b></td>
+      <td><b style="color:var(--green);">${periodIn}</b></td>
+      <td><b>${periodOut}</b></td>
+      <td><b>${closing}</b></td>
+      <td>-</td><td>-</td><td>-</td>
+      <td style="color:var(--muted);">${periodOpening} + ${periodIn} - ${periodOut} = ${closing}</td>
+    </tr>`;
 
-  const totalIn  = movRows.reduce((s, r) => s + r.inQ, 0);
-  const totalOut = movRows.reduce((s, r) => s + r.outQ, 0);
-  const net = totalIn - totalOut;
-  const actual = Number(movProduct.quantity) || 0;
-  const gap = actual - net;
+  $('#mov-list').innerHTML = openRow
+    + (html || `<tr><td colspan="9" class="empty">ما في حركات بهاي الفترة</td></tr>`)
+    + closeRow;
+
   const filtered = !!(from || to || movKind);
   $('#mov-summary').innerHTML =
-    `وارد <b style="color:var(--green);">${totalIn}</b> · صادر <b>${totalOut}</b> · صافي الحركة <b>${net}</b>` +
-    ` · الكمية الحالية <b>${actual}</b>` +
-    (filtered ? `<br><span style="color:var(--muted);">المعروض: وارد ${shownIn} · صادر ${shownOut} · إجمالي القيمة ${shownValue.toFixed(0)} ل.س</span>` : '');
+    `رصيد افتتاحي <b>${opening}</b> + وارد <b style="color:var(--green);">${totalIn}</b>` +
+    ` − صادر <b>${totalOut}</b> = الكمية الحالية <b>${actual}</b>` +
+    (filtered ? `<br><span style="color:var(--muted);">المعروض بالجدول: وارد ${shownIn} · صادر ${shownOut} · إجمالي القيمة ${shownValue.toFixed(0)} ل.س</span>` : '');
 
-  $('#mov-note').innerHTML = gap === 0
-    ? '✅ صافي الحركات بيطابق الكمية الحالية تمامًا.'
-    : `<b>الفرق ${gap > 0 ? '+' : ''}${gap} قطعة</b> بين صافي الحركات والكمية الحالية. هاد متوقع ومو خطأ بالضرورة - أسبابه:
-       <br>· الكمية الافتتاحية للأصناف المضافة يدويًا ما إلها سطر وارد
-       <br>· النقل بين الفروع، الجرد الفعلي، وهدايا النقاط ما بينسجلوا مربوطين بالصنف
-       <br><span style="color:var(--muted);">لتسجيل كل حركة بدقة لازم جدول حركات مستقل.</span>`;
+  const warn = opening < 0
+    ? `<br><b style="color:var(--red);">⚠ الرصيد الافتتاحي سالب (${opening})</b> — معناها انباع أو انصرف أكتر مما دخل ومما هو موجود. راجع كمية الصنف.`
+    : '';
+  $('#mov-note').innerHTML =
+    `البيان مقفل: <b>${opening} + ${totalIn} − ${totalOut} = ${actual}</b> ✅` +
+    `<br><span style="color:var(--muted);">"الرصيد الافتتاحي" محسوب بالعكس من الكمية الحالية، فهو بيضم كمية البداية للصنف
+     <b>مع</b> أي حركة ما بتنسجل مربوطة بالصنف: النقل بين الفروع، الجرد الفعلي، وهدايا النقاط.
+     لفصلهم لازم جدول حركات مستقل.</span>` + warn;
 }
 
 // ================= الأصناف الراكدة =================
