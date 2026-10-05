@@ -853,6 +853,43 @@
     <!-- ---------- الجرد والأصناف الراكدة (صاحب المحل) ---------- -->
     <section id="tab-stock" class="tab-panel">
       <div class="card">
+        <h2>🧾 كشف حركة صنف</h2>
+        <p style="font-size:13px; color:var(--muted); margin-top:0;">
+          كل وارد وصادر للصنف بالترتيب الزمني مع الرصيد المتراكم — من فواتير التوريد والمبيعات والمرتجعات.
+        </p>
+        <input type="text" id="mov-search" placeholder="🔍 دوّر باسم الصنف أو الباركود أو الرقم المتسلسل"
+               style="width:100%; padding:8px; border-radius:8px; border:1px solid var(--border);">
+        <div id="mov-results" style="font-size:13px; margin-top:4px;"></div>
+        <div id="mov-head" style="display:none; margin-top:10px;">
+          <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:8px; font-size:13px;">
+            <b id="mov-name"></b>
+            <span style="color:var(--muted);">الكمية الحالية: <b id="mov-qty"></b></span>
+            <span style="margin-inline-start:auto;">من <input type="date" id="mov-from" style="padding:5px; border-radius:6px; border:1px solid var(--border);">
+            إلى <input type="date" id="mov-to" style="padding:5px; border-radius:6px; border:1px solid var(--border);"></span>
+            <button type="button" class="btn secondary tiny" id="mov-clear-dates">كل الفترة</button>
+          </div>
+          <div id="mov-kind-row" style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px;">
+            <button type="button" class="btn chip mov-kind active" data-kind="">كل الحركات</button>
+            <button type="button" class="btn chip mov-kind" data-kind="بيع">المبيعات بس</button>
+            <button type="button" class="btn chip mov-kind" data-kind="وارد">الوارد بس</button>
+            <button type="button" class="btn chip mov-kind" data-kind="مرتجع">المرتجعات بس</button>
+          </div>
+          <div id="mov-summary" style="padding:9px 12px; border:1px solid var(--border); border-radius:8px;
+               font-size:13px; margin-bottom:8px;"></div>
+          <div style="overflow:auto; max-height:460px; border:1px solid var(--border); border-radius:8px;">
+            <table>
+              <thead><tr>
+                <th>التاريخ والوقت</th><th>الحركة</th><th>داخل</th><th>خارج</th><th>الرصيد</th><th>السعر</th><th>الإجمالي</th><th>الكاشير</th><th>المرجع</th>
+              </tr></thead>
+              <tbody id="mov-list"></tbody>
+            </table>
+          </div>
+          <div id="mov-note" style="font-size:12px; color:var(--muted); margin-top:8px; line-height:1.8;"></div>
+        </div>
+        <div id="mov-status" style="margin-top:6px; font-size:13px;"></div>
+      </div>
+
+      <div class="card">
         <h2>📋 الجرد الفعلي</h2>
         <p style="font-size:13px; color:var(--muted); margin-top:0;">
           دوّر عن الصنف (بالاسم أو الباركود أو الرقم) واكتب الكمية <b>الموجودة فعليًا بالرف</b>.
@@ -1495,7 +1532,7 @@
 
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <script type="module">
-// نسخة: 2026.10.03-d (إصلاح خلط العملة + نقل أصناف مختارة لفرع تاني)
+// نسخة: 2026.10.04-f (كشف حركة صنف بالتاريخ والوقت والكاشير + نقل أصناف مختارة + إصلاح العملة)
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 // ============================================================
@@ -5687,6 +5724,168 @@ $('#stock-clear-btn')?.addEventListener('click', () => {
   renderStockCount();
   $('#stock-status').textContent = 'انمسح العدّ';
 });
+
+// ================= كشف حركة صنف =================
+// بيجمع الحركات من تلات مصادر فيها product_id: فواتير التوريد (وبيشمل "استلام بضاعة")،
+// المبيعات المكتملة، والمرتجعات. النقل بين الفروع والجرد وهدايا النقاط مسجّلين بـactivity_log
+// كنص حر بدون product_id، فما بيقدروا يظهروا هون - وهاد مشروح للمستخدم بآخر الكشف.
+let movProduct = null;
+let movRows = [];
+
+function movToSyp(v, cur) {
+  const n = Number(v) || 0;
+  const r = Number(CURRENT_USD_RATE) || 0;
+  return (cur === 'usd' && r > 0) ? n * r : n;
+}
+
+$('#mov-search')?.addEventListener('input', () => {
+  const q = ($('#mov-search').value || '').trim().toLowerCase();
+  const box = $('#mov-results');
+  if (q.length < 2) { box.innerHTML = ''; return; }
+  const hits = (productsCache || []).filter(p =>
+    (p.name || '').toLowerCase().includes(q) ||
+    String(p.barcode || '').toLowerCase().includes(q) ||
+    String(p.serial_no || '').includes(q)
+  ).slice(0, 8);
+  box.innerHTML = hits.length
+    ? hits.map(p => `<div class="inv-suggest-item mov-pick" data-id="${escapeAttr(p.id)}"
+         style="cursor:pointer; padding:4px 2px;">${escapeHtml(p.name)}
+         <span style="color:var(--muted);">· متوفر ${p.quantity}</span></div>`).join('')
+    : '<span style="color:var(--muted);">ما في صنف مطابق</span>';
+});
+
+$('#mov-results')?.addEventListener('click', (e) => {
+  const el = e.target.closest('.mov-pick');
+  if (!el) return;
+  const p = (productsCache || []).find(x => x.id === el.dataset.id);
+  if (!p) return;
+  $('#mov-results').innerHTML = '';
+  $('#mov-search').value = p.name;
+  loadMovements(p);
+});
+
+let movKind = '';
+$('#mov-kind-row')?.addEventListener('click', (e) => {
+  const b = e.target.closest('.mov-kind');
+  if (!b) return;
+  movKind = b.dataset.kind || '';
+  document.querySelectorAll('.mov-kind').forEach(x => x.classList.toggle('active', x === b));
+  renderMovements();
+});
+$('#mov-from')?.addEventListener('change', renderMovements);
+$('#mov-to')?.addEventListener('change', renderMovements);
+$('#mov-clear-dates')?.addEventListener('click', () => {
+  $('#mov-from').value = ''; $('#mov-to').value = ''; renderMovements();
+});
+
+async function loadMovements(p) {
+  movProduct = p;
+  movRows = [];
+  const statusEl = $('#mov-status');
+  statusEl.style.color = 'var(--muted)';
+  statusEl.textContent = '⏳ عم يجمع الحركات...';
+  $('#mov-head').style.display = 'none';
+
+  const [invRes, salRes, retRes] = await Promise.all([
+    supabase.from('purchase_invoice_items')
+      .select('quantity, cost_price, price_currency, purchase_invoices!inner(invoice_date)')
+      .eq('product_id', p.id),
+    supabase.from('sale_items')
+      .select('quantity, unit_price, subtotal, sales!inner(sale_date, status, invoice_no, sold_by, customer_phone)')
+      .eq('product_id', p.id).eq('sales.status', 'completed'),
+    supabase.from('returns').select('quantity, unit_price, type, note, return_date')
+      .eq('product_id', p.id),
+  ]);
+  const err = invRes.error || salRes.error || retRes.error;
+  if (err) { statusEl.style.color = 'var(--red)'; statusEl.textContent = '❌ ' + err.message; return; }
+
+  (invRes.data || []).forEach(r => {
+    const qty = Number(r.quantity) || 0;
+    const unit = movToSyp(r.cost_price, r.price_currency);
+    movRows.push({
+      t: r.purchase_invoices.invoice_date, kind: 'وارد', color: 'var(--green)',
+      inQ: qty, outQ: 0, price: unit, total: unit * qty, who: '', ref: 'فاتورة توريد',
+    });
+  });
+  (salRes.data || []).forEach(r => {
+    const qty = Number(r.quantity) || 0;
+    const unit = Number(r.unit_price) || 0;
+    movRows.push({
+      t: r.sales.sale_date, kind: 'بيع', color: '',
+      inQ: 0, outQ: qty, price: unit,
+      total: r.subtotal != null ? Number(r.subtotal) : unit * qty,
+      who: cashierName(r.sales.sold_by),
+      ref: (r.sales.invoice_no ? ('فاتورة ' + r.sales.invoice_no) : 'بيع')
+         + (r.sales.customer_phone ? ' · ' + r.sales.customer_phone : ''),
+    });
+  });
+  (retRes.data || []).forEach(r => {
+    const isCust = r.type === 'customer';
+    const qty = Number(r.quantity) || 0;
+    const unit = Number(r.unit_price) || 0;
+    movRows.push({
+      t: r.return_date, kind: isCust ? 'مرتجع زبون' : 'مرتجع مورد', color: 'var(--orange)',
+      inQ: isCust ? qty : 0, outQ: isCust ? 0 : qty,
+      price: unit, total: unit * qty, who: '', ref: r.note || '-',
+    });
+  });
+  movRows.sort((a, b) => new Date(a.t) - new Date(b.t));
+
+  statusEl.textContent = '';
+  $('#mov-head').style.display = 'block';
+  $('#mov-name').textContent = p.name;
+  $('#mov-qty').textContent = p.quantity;
+  renderMovements();
+}
+
+function renderMovements() {
+  if (!movProduct) return;
+  const from = $('#mov-from').value ? new Date($('#mov-from').value + 'T00:00:00') : null;
+  const to   = $('#mov-to').value   ? new Date($('#mov-to').value + 'T23:59:59') : null;
+
+  // الرصيد بينحسب من أول الحركات دايمًا - الفلترة بتخفي أسطر بس ما بتصفّر الرصيد
+  let bal = 0, shownIn = 0, shownOut = 0, shownValue = 0;
+  const html = movRows.map((r) => {
+    bal += r.inQ - r.outQ;                       // الرصيد تراكمي دايمًا، الفلاتر بتخفي أسطر بس
+    const d = new Date(r.t);
+    if (from && d < from) return '';
+    if (to && d > to) return '';
+    if (movKind && !r.kind.startsWith(movKind)) return '';
+    shownIn += r.inQ; shownOut += r.outQ; shownValue += Number(r.total) || 0;
+    return `<tr>
+      <td style="white-space:nowrap;">${d.toLocaleDateString('ar')}
+        <div style="font-size:11px; color:var(--muted);">${d.toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit' })}</div></td>
+      <td${r.color ? ` style="color:${r.color};"` : ''}>${r.kind}</td>
+      <td>${r.inQ || ''}</td>
+      <td>${r.outQ || ''}</td>
+      <td><b>${bal}</b></td>
+      <td>${r.price ? r.price.toFixed(0) : '-'}</td>
+      <td>${r.total ? Number(r.total).toFixed(0) : '-'}</td>
+      <td style="color:var(--muted);">${escapeHtml(r.who || '-')}</td>
+      <td style="color:var(--muted);">${escapeHtml(r.ref)}</td>
+    </tr>`;
+  }).filter(Boolean).join('');
+
+  $('#mov-list').innerHTML = html || '<tr><td colspan="9" class="empty">ما في حركات بهاي الفترة</td></tr>';
+
+  const totalIn  = movRows.reduce((s, r) => s + r.inQ, 0);
+  const totalOut = movRows.reduce((s, r) => s + r.outQ, 0);
+  const net = totalIn - totalOut;
+  const actual = Number(movProduct.quantity) || 0;
+  const gap = actual - net;
+  const filtered = !!(from || to || movKind);
+  $('#mov-summary').innerHTML =
+    `وارد <b style="color:var(--green);">${totalIn}</b> · صادر <b>${totalOut}</b> · صافي الحركة <b>${net}</b>` +
+    ` · الكمية الحالية <b>${actual}</b>` +
+    (filtered ? `<br><span style="color:var(--muted);">المعروض: وارد ${shownIn} · صادر ${shownOut} · إجمالي القيمة ${shownValue.toFixed(0)} ل.س</span>` : '');
+
+  $('#mov-note').innerHTML = gap === 0
+    ? '✅ صافي الحركات بيطابق الكمية الحالية تمامًا.'
+    : `<b>الفرق ${gap > 0 ? '+' : ''}${gap} قطعة</b> بين صافي الحركات والكمية الحالية. هاد متوقع ومو خطأ بالضرورة - أسبابه:
+       <br>· الكمية الافتتاحية للأصناف المضافة يدويًا ما إلها سطر وارد
+       <br>· النقل بين الفروع، الجرد الفعلي، وهدايا النقاط ما بينسجلوا مربوطين بالصنف
+       <br><span style="color:var(--muted);">لتسجيل كل حركة بدقة لازم جدول حركات مستقل.</span>`;
+}
 
 // ================= الأصناف الراكدة =================
 $('#slow-load-btn')?.addEventListener('click', async () => {
