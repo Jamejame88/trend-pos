@@ -168,6 +168,7 @@
     font-size: 13px;
   }
   .cart-price-input.price-overridden { border-color: var(--green); color: var(--green); font-weight: bold; }
+  .cart-price-input[readonly] { background: #f3f3f3; color: #666; cursor: not-allowed; }
   .cart-price-input.below-cost { border-color: var(--red); color: var(--red); font-weight: bold; background: #fff5f5; }
   .cart-row.below-cost-row { background: #fff7f7; }
   .below-cost-note { grid-column: 1 / -1; font-size: 11.5px; color: var(--red); padding: 2px 4px 0; }
@@ -2609,6 +2610,13 @@ function addToCart(productId) {
 function updateCartItemPrice(idx, newPrice) {
   const item = cart[idx];
   if (!item) return;
+  // حماية: الموظف ما بيقدر يغيّر السعر (حتى لو فتح الحقل من أدوات المتصفح) - بنرجّعه للسعر المسجّل
+  if (!canEditCartPrice()) {
+    item.price = item.basePrice;
+    item.subtotal = item.qty * item.price;
+    renderCart();
+    return;
+  }
   let price = parseFloat(newPrice);
   if (isNaN(price) || price < 0) price = 0;
   item.price = price;
@@ -2652,7 +2660,8 @@ function renderCart() {
       <span>${item.qty} ×</span>
       <input type="number" class="cart-price-input${item.price !== item.basePrice ? ' price-overridden' : ''}${low ? ' below-cost' : ''}"
         id="cart-item-price-${idx}" data-idx="${idx}" value="${item.price}" min="0" step="1"
-        title="سعر البيع لهاي الفاتورة بس (متل هدية بتنباع اليوم بأكتر من سعرها المسجّل) - ما بيغيّر سعر المنتج بالمخزون">
+        ${canEditCartPrice() ? '' : 'readonly tabindex="-1"'}
+        title="${canEditCartPrice() ? 'سعر البيع لهاي الفاتورة بس (متل هدية بتنباع اليوم بأكتر من سعرها المسجّل) - ما بيغيّر سعر المنتج بالمخزون' : '🔒 تعديل السعر مسموح لصاحب المحل بس'}">
       <span id="cart-item-subtotal-${idx}">${item.subtotal.toFixed(0)}</span>
       <button class="btn tiny danger remove-item" data-idx="${idx}">✕</button>
       ${low ? `<div class="below-cost-note" id="cart-item-warn-${idx}">⚠ تحت الكلفة (${Number(item.cost).toFixed(0)}) - خسارة ${((item.cost - item.price) * item.qty).toFixed(0)} ل.س</div>` : ''}
@@ -2679,7 +2688,8 @@ let saleInvoiceUnmatched = [];
 
 function addInvoiceItemToCart(product, qty, price) {
   qty = Math.max(1, parseInt(qty) || 1);
-  const unitPrice = price > 0 ? Number(price) : effectiveSalePrice(product);
+  // الموظف دايمًا بيبيع بالسعر المسجّل بالمخزون (حتى لو الفاتورة المقروءة فيها سعر تاني)؛ المالك بس بياخد سعر الفاتورة
+  const unitPrice = (canEditCartPrice() && price > 0) ? Number(price) : effectiveSalePrice(product);
   const existing = cart.find(i => i.product_id === product.id);
   if (existing) {
     existing.qty += qty;
@@ -2728,7 +2738,7 @@ $('#sale-invoice-analyze-btn').addEventListener('click', async () => {
       const name = String(it.name || '').trim();
       if (!name) return;
       const qty = Math.max(1, parseInt(it.qty) || 1);
-      const price = parseFloat(it.price) || 0;
+      const price = parseAiPrice(it.price);
       const existing = productsCache.find(p => normalizeProductName(p.name) === normalizeProductName(name));
       if (existing) {
         addInvoiceItemToCart(existing, qty, price);
@@ -2828,6 +2838,22 @@ function toEnglishDigits(str) {
     if (code >= 0x06F0 && code <= 0x06F9) return String(code - 0x06F0); // فارسي
     return d;
   });
+}
+
+// بيقرا رقم سعر ممكن يوصل من قراءة الذكاء الاصطناعي لصورة فاتورة (Gemini) - وفيه فاصلة
+// آلاف زي ما هي مكتوبة بالفاتورة الأصلية (مثلاً "50,000")، أو أرقام عربية، أو رمز عملة.
+// بدون هالتنضيف: parseFloat("50,000") بيرجع 50 بس (بيوقف عند أول فاصلة)، وNumber("50,000") بيرجع NaN.
+function parseAiPrice(v) {
+  if (v === null || v === undefined || v === '') return 0;
+  if (typeof v === 'number') return isFinite(v) ? v : 0;
+  const cleaned = toEnglishDigits(String(v)).replace(/,/g, '').replace(/[^\d.\-]/g, '');
+  const n = parseFloat(cleaned);
+  return isFinite(n) ? n : 0;
+}
+
+// تعديل سعر الصنف بالسلة وقت البيع (فاتورة مبيعات): للمالك بس. الموظف بيبيع بالسعر المسجّل بالمخزون.
+function canEditCartPrice() {
+  return !!(currentProfile && currentProfile.role === 'owner');
 }
 
 $('#discount-input').addEventListener('input', updateTotals);
@@ -7409,7 +7435,7 @@ $('#invoice-analyze-btn').addEventListener('click', async () => {
     invoiceItems = items.map((it) => {
       const name = String(it.name || '').trim();
       const existing = productsCache.find(p => normalizeProductName(p.name) === normalizeProductName(name));
-      let cost = Number(it.price) || 0;
+      let cost = parseAiPrice(it.price);
       if (usdRate) cost = Math.round(cost * usdRate);
       let sell;
       if (existing) {
