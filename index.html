@@ -298,6 +298,22 @@
       width: 100%;
     }
   }
+  /* ---------- الرسوم البيانية ---------- */
+  .chart-note { font-size: 12px; color: var(--muted); margin: 0 0 8px; }
+  .chart-readout { font-size: 13px; min-height: 20px; margin-bottom: 6px; }
+  .chart-readout strong { font-size: 15px; }
+  .chart-box svg { width: 100%; height: auto; display: block; direction: ltr; touch-action: manipulation; }
+  .ch-axis { font-size: 11px; fill: var(--muted); }
+  .ch-grid { stroke: var(--border); stroke-width: 1; }
+  .ch-zero { stroke: #888; stroke-width: 1.2; }
+  .ch-bar-sales { fill: #2c6fbb; }
+  .ch-bar-pos { fill: var(--green); }
+  .ch-bar-neg { fill: var(--red); }
+  .ch-line-stock { stroke: var(--orange); fill: none; stroke-width: 2.2; stroke-linejoin: round; }
+  .ch-area-stock { fill: var(--orange); opacity: .12; }
+  .ch-dot { fill: var(--orange); stroke: #fff; stroke-width: 2; }
+  .ch-bar.sel { opacity: .6; }
+  .ch-hit { fill: transparent; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -346,6 +362,7 @@
     <button class="tab-btn owner-only" data-tab="returns">المرتجعات</button>
     <button class="tab-btn owner-only" data-tab="purchases">فواتير التوريد</button>
     <button class="tab-btn owner-only" data-tab="report">التقرير 🔒</button>
+    <button class="tab-btn owner-only" data-tab="charts">الرسوم 📈</button>
     <button class="tab-btn owner-only" data-tab="log">سجل العمليات</button>
     <button class="tab-btn owner-only" data-tab="employees">الموظفين</button>
     <button class="tab-btn owner-only" data-tab="settings">ضبط البرنامج</button>
@@ -1242,6 +1259,44 @@
           <h3>⚠ منطقة خطر - ضبط المصنع</h3>
           <p style="font-size:13px; margin-top:0;">هاد بيمسح كل بيانات <strong>الفرع الحالي فقط</strong> نهائيًا (منتجات، مبيعات، ديون، مرتجعات، سجل عمليات، وكلمة سر التقرير) - الفرع التاني ما يتأثر. ما فيك تتراجع بعدها.</p>
           <button class="btn danger" id="factory-reset-btn">🗑 ضبط المصنع لهاد الفرع</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- الرسوم البيانية (صاحب المحل - نفس كلمة سر التقرير) ---------- -->
+    <section id="tab-charts" class="tab-panel">
+      <div class="card" id="charts-locked-card">
+        <h2>🔒 الرسوم البيانية محمية بكلمة سر التقرير</h2>
+        <div class="field"><label>كلمة سر التقرير</label><input type="password" id="charts-password-input"></div>
+        <button class="btn" id="charts-unlock-btn">فتح الرسوم</button>
+        <div class="error-text" id="charts-password-error"></div>
+      </div>
+      <div id="charts-content" style="display:none;">
+        <div class="card">
+          <h2>🛒 المبيعات - آخر 30 يوم</h2>
+          <p class="chart-note">صافي المبيعات لكل يوم (بعد الخصم ومطروح منها مرتجعات الزباين). المس أي عمود لتشوف قيمته.</p>
+          <div class="chart-readout" id="chart-sales-readout"></div>
+          <div class="chart-box" id="chart-sales"></div>
+        </div>
+        <div class="card">
+          <h2>💰 صافي الأرباح - آخر 30 يوم</h2>
+          <p class="chart-note">نفس معادلة "ملخص الأرباح": المبيعات − كلفة المباع − المرتجعات − المصاريف. الكلفة تقديرية (على سعر الشراء الحالي). الأحمر = يوم بخسارة.</p>
+          <div class="chart-readout" id="chart-profit-readout"></div>
+          <div class="chart-box" id="chart-profit"></div>
+        </div>
+        <div class="card">
+          <h2>📦 مسار المخزون منذ 1/9/2026</h2>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+            <button type="button" class="btn chip stock-chart-chip active" data-m="units">عدد القطع</button>
+            <button type="button" class="btn chip stock-chart-chip" data-m="value">القيمة بالكلفة</button>
+          </div>
+          <p class="chart-note">⚠ تقريبي: بيتحسب رجوعًا من المخزون الحالي حسب المبيعات وفواتير التوريد والمرتجعات. ما بيشمل تعديلات الجرد اليدوي ولا النقل بين الفروع ولا تعديل الكمية من شاشة المنتج.</p>
+          <div class="chart-readout" id="chart-stock-readout"></div>
+          <div class="chart-box" id="chart-stock"></div>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <button class="btn secondary" id="charts-refresh-btn">🔄 تحديث الرسوم</button>
+          <span id="charts-status" style="font-size:12px; color:var(--muted);"></span>
         </div>
       </div>
     </section>
@@ -2340,6 +2395,7 @@ const TAB_LOADERS = {
   points:    () => Promise.all([loadPointsLedger(), loadPointsLiability()]),
   suppliers: () => loadSupplierDebts(),
   stock:     () => { loadStockCounts(); renderStockCount(); return Promise.resolve(); },
+  charts:    () => (reportUnlocked ? loadCharts() : Promise.resolve()),
 };
 let tabsLoaded = {};
 
@@ -6431,9 +6487,8 @@ $('#returns-list').addEventListener('click', async (e) => {
 // ---------------- التقرير المحمي بكلمة سر (صاحب المحل) ----------------
 let reportUnlocked = false;
 
-$('#report-unlock-btn').addEventListener('click', async () => {
-  const entered = $('#report-password-input').value;
-  const errBox = $('#report-password-error');
+// التحقق من كلمة سر التقرير - مشترك بين تبويب التقرير وتبويب الرسوم
+async function verifyReportPassword(entered, errBox) {
   errBox.textContent = '';
   const { data, error } = await supabase.from('settings').select('*').eq('branch_id', activeBranchId).eq('key', 'report_password').maybeSingle();
   if (error) { errBox.textContent = 'خطأ: ' + error.message; return; }
@@ -6448,6 +6503,13 @@ $('#report-unlock-btn').addEventListener('click', async () => {
   }
   if (data.value !== entered) { errBox.textContent = 'كلمة السر غلط'; return; }
   await unlockReport();
+}
+
+$('#report-unlock-btn').addEventListener('click', () => {
+  verifyReportPassword($('#report-password-input').value, $('#report-password-error'));
+});
+$('#charts-unlock-btn')?.addEventListener('click', () => {
+  verifyReportPassword($('#charts-password-input').value, $('#charts-password-error'));
 });
 
 async function unlockReport() {
@@ -6456,6 +6518,13 @@ async function unlockReport() {
   $('#report-password-input').value = '';
   $('#report-locked-card').style.display = 'none';
   $('#report-content').style.display = 'block';
+  // تبويب الرسوم بيفتح مع نفس كلمة السر
+  $('#charts-password-error').textContent = '';
+  $('#charts-password-input').value = '';
+  $('#charts-locked-card').style.display = 'none';
+  $('#charts-content').style.display = 'block';
+  tabsLoaded.charts = false;             // لو فتحنا التقرير أول، الرسوم بتتحمّل أول ما نفتح تبويبها
+  if ($('#tab-charts').classList.contains('active')) { tabsLoaded.charts = true; safe(loadCharts, 'charts'); }
   await loadReportData();
   await loadDailyReport();
   await loadProfitSummary();
@@ -6465,6 +6534,9 @@ $('#report-lock-btn').addEventListener('click', () => {
   reportUnlocked = false;
   $('#report-content').style.display = 'none';
   $('#report-locked-card').style.display = 'block';
+  $('#charts-content').style.display = 'none';
+  $('#charts-locked-card').style.display = 'block';
+  chartsData = null;
 });
 
 // ---------------- ضبط البرنامج - المحمي بكلمة سر منفصلة (صاحب المحل) ----------------
@@ -6695,6 +6767,274 @@ $('#report-content')?.addEventListener('click', (e) => {
 });
 
 $('#profit-refresh-btn')?.addEventListener('click', loadProfitSummary);
+
+// ================= الرسوم البيانية (مبيعات / أرباح / مسار المخزون) =================
+// رسم SVG مباشر بالصفحة (بدون مكتبة خارجية) حتى تضل شغالة أوفلاين. محمية بنفس كلمة سر التقرير.
+const STOCK_CHART_START = '2026-09-01';   // بداية مسار المخزون
+let chartsData = null;
+let stockChartMode = 'units';
+
+function chartLocalKey(d) {
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return d.getFullYear() + '-' + m + '-' + day;
+}
+// تاريخ الفاتورة ممكن يجي كنص يوم فقط (YYYY-MM-DD) أو وقت كامل - منحوّله ليوم محلي
+function chartKeyOf(v) {
+  if (typeof v === 'string' && v.length === 10) return v;
+  return chartLocalKey(new Date(v));
+}
+function chartDaysBetween(startDate, endDate) {
+  const keys = [];
+  const d = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+  const last = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+  while (d <= last) { keys.push(chartLocalKey(d)); d.setDate(d.getDate() + 1); }
+  return keys;
+}
+function chartDayLabel(key) { const p = key.split('-'); return Number(p[2]) + '/' + Number(p[1]); }
+function chartFmtFull(n) { return Math.round(n).toLocaleString('en-US'); }
+function chartFmtCompact(n) {
+  const a = Math.abs(n), sign = n < 0 ? '-' : '';
+  if (a >= 1e9) return sign + (a / 1e9).toFixed(1).replace(/\.0$/, '') + ' مليار';
+  if (a >= 1e6) return sign + (a / 1e6).toFixed(1).replace(/\.0$/, '') + ' م';
+  if (a >= 1e3) return sign + Math.round(a / 1e3) + ' ألف';
+  return sign + Math.round(a);
+}
+function chartNiceScale(min, max, n) {
+  if (max === min) max = min + 1;
+  const raw = (max - min) / n;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const norm = raw / mag;
+  const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
+  return { lo: Math.floor(min / step) * step, hi: Math.ceil(max / step) * step, step };
+}
+function chartAxisSvg(keys, sc, W, H, L, R, T, B, yOf, xCenter) {
+  let out = '';
+  for (let v = sc.lo; v <= sc.hi + sc.step / 2; v += sc.step) {
+    const y = yOf(v).toFixed(1);
+    out += `<line class="${Math.abs(v) < sc.step / 1000 ? 'ch-zero' : 'ch-grid'}" x1="${L}" x2="${W - R}" y1="${y}" y2="${y}"/>`;
+    out += `<text class="ch-axis" x="${L - 6}" y="${(Number(y) + 4).toFixed(1)}" text-anchor="end">${chartFmtCompact(v)}</text>`;
+  }
+  const every = Math.max(1, Math.ceil(keys.length / 7));
+  keys.forEach((k, i) => {
+    if (i % every === 0 || i === keys.length - 1) {
+      out += `<text class="ch-axis" x="${xCenter(i).toFixed(1)}" y="${H - 8}" text-anchor="middle">${chartDayLabel(k)}</text>`;
+    }
+  });
+  return out;
+}
+
+// أعمدة: values[i] لكل يوم keys[i]. colorFn(v) بترجع اسم كلاس اللون.
+function renderBarChart(boxId, readoutId, keys, values, colorFn, defaultHtml) {
+  const box = $('#' + boxId), ro = $('#' + readoutId);
+  if (!box) return;
+  const W = 640, H = 230, L = 56, R = 16, T = 12, B = 26;
+  const iw = W - L - R, ih = H - T - B;
+  const sc = chartNiceScale(Math.min(0, ...values), Math.max(0, ...values), 4);
+  const yOf = (v) => T + ih * (1 - (v - sc.lo) / (sc.hi - sc.lo));
+  const slot = iw / values.length, bw = Math.max(2, slot * 0.68);
+  const xCenter = (i) => L + slot * i + slot / 2;
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img">` + chartAxisSvg(keys, sc, W, H, L, R, T, B, yOf, xCenter);
+  const y0 = yOf(0);
+  values.forEach((v, i) => {
+    const y = yOf(v), top = Math.min(y, y0), h = Math.max(Math.abs(y - y0), v !== 0 ? 1.5 : 0);
+    svg += `<rect class="ch-bar ${colorFn(v)}" data-i="${i}" x="${(xCenter(i) - bw / 2).toFixed(1)}" y="${top.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="2"/>`;
+    svg += `<rect class="ch-hit" data-i="${i}" x="${(L + slot * i).toFixed(1)}" y="${T}" width="${slot.toFixed(1)}" height="${ih}"/>`;
+  });
+  svg += '</svg>';
+  box.innerHTML = svg;
+  ro.innerHTML = defaultHtml;
+  const show = (e) => {
+    const t = e.target.closest('[data-i]'); if (!t) return;
+    const i = Number(t.dataset.i);
+    box.querySelectorAll('.ch-bar').forEach(b => b.classList.toggle('sel', Number(b.dataset.i) !== i));
+    ro.innerHTML = `${chartDayLabel(keys[i])}: <strong>${chartFmtFull(values[i])}</strong> ل.س`;
+  };
+  box.onclick = show;
+  box.onmouseover = show;
+  box.onmouseleave = () => {
+    box.querySelectorAll('.ch-bar').forEach(b => b.classList.remove('sel'));
+    ro.innerHTML = defaultHtml;
+  };
+}
+
+// خط + منطقة ملوّنة تحته (مسار المخزون)
+function renderLineChart(boxId, readoutId, keys, values, unitLabel, defaultHtml) {
+  const box = $('#' + boxId), ro = $('#' + readoutId);
+  if (!box) return;
+  const W = 640, H = 230, L = 56, R = 22, T = 12, B = 26;
+  const iw = W - L - R, ih = H - T - B;
+  const mn = Math.min(...values), mx = Math.max(...values);
+  const pad = (mx - mn) * 0.1 || Math.max(1, Math.abs(mx) * 0.05);
+  const sc = chartNiceScale(Math.max(0, mn - pad), mx + pad, 4);
+  const yOf = (v) => T + ih * (1 - (v - sc.lo) / (sc.hi - sc.lo));
+  const n = values.length;
+  const xCenter = (i) => L + (n === 1 ? iw / 2 : (iw * i) / (n - 1));
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img">` + chartAxisSvg(keys, sc, W, H, L, R, T, B, yOf, xCenter);
+  const pts = values.map((v, i) => `${xCenter(i).toFixed(1)},${yOf(v).toFixed(1)}`);
+  svg += `<polygon class="ch-area-stock" points="${xCenter(0).toFixed(1)},${yOf(sc.lo).toFixed(1)} ${pts.join(' ')} ${xCenter(n - 1).toFixed(1)},${yOf(sc.lo).toFixed(1)}"/>`;
+  svg += `<polyline class="ch-line-stock" points="${pts.join(' ')}"/>`;
+  svg += `<circle class="ch-dot" id="${boxId}-dot" cx="${xCenter(n - 1).toFixed(1)}" cy="${yOf(values[n - 1]).toFixed(1)}" r="4.5"/>`;
+  const slot = n === 1 ? iw : iw / (n - 1);
+  values.forEach((v, i) => {
+    svg += `<rect class="ch-hit" data-i="${i}" x="${(xCenter(i) - slot / 2).toFixed(1)}" y="${T}" width="${slot.toFixed(1)}" height="${ih}"/>`;
+  });
+  svg += '</svg>';
+  box.innerHTML = svg;
+  ro.innerHTML = defaultHtml;
+  const dot = $('#' + boxId + '-dot');
+  const show = (e) => {
+    const t = e.target.closest('[data-i]'); if (!t) return;
+    const i = Number(t.dataset.i);
+    dot.setAttribute('cx', xCenter(i).toFixed(1));
+    dot.setAttribute('cy', yOf(values[i]).toFixed(1));
+    ro.innerHTML = `${chartDayLabel(keys[i])}: <strong>${chartFmtFull(values[i])}</strong> ${unitLabel}`;
+  };
+  box.onclick = show;
+  box.onmouseover = show;
+}
+
+// جلب كل الصفوف على دفعات (Supabase بيرجّع 1000 صف كحد أقصى بالطلب الواحد)
+async function chartFetchAll(buildQuery) {
+  const out = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await buildQuery().range(from, from + 999);
+    if (error) throw error;
+    out.push(...(data || []));
+    if (!data || data.length < 1000) break;
+  }
+  return out;
+}
+
+async function loadCharts() {
+  if (!currentProfile || currentProfile.role !== 'owner' || !reportUnlocked) return;
+  const statusEl = $('#charts-status');
+  statusEl.style.color = 'var(--muted)';
+  statusEl.textContent = '⏳ عم يحمّل البيانات...';
+  try {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const d30 = new Date(todayStart); d30.setDate(d30.getDate() - 29);
+    const stockStart = new Date(STOCK_CHART_START + 'T00:00:00');
+    const earliest = stockStart < d30 ? stockStart : d30;
+    const tomorrow = new Date(todayStart); tomorrow.setDate(tomorrow.getDate() + 1);
+    const startISO = earliest.toISOString(), endISO = tomorrow.toISOString();
+    const startKey = chartLocalKey(earliest);
+    const br = activeBranchId;
+
+    const [salesRows, itemRows, retRows, expRows, purRows] = await Promise.all([
+      chartFetchAll(() => supabase.from('sales').select('total, sale_date')
+        .eq('branch_id', br).eq('status', 'completed')
+        .gte('sale_date', startISO).lt('sale_date', endISO).order('sale_date')),
+      chartFetchAll(() => supabase.from('sale_items')
+        .select('quantity, products(cost_price, price_currency), sales!inner(branch_id, status, sale_date)')
+        .eq('sales.branch_id', br).eq('sales.status', 'completed')
+        .gte('sales.sale_date', startISO).lt('sales.sale_date', endISO)),
+      chartFetchAll(() => supabase.from('returns')
+        .select('quantity, unit_price, type, return_date, products(cost_price, price_currency)')
+        .eq('branch_id', br).gte('return_date', startISO).lt('return_date', endISO)),
+      chartFetchAll(() => supabase.from('expenses').select('amount, expense_date')
+        .eq('branch_id', br).gte('expense_date', startISO).lt('expense_date', endISO)),
+      chartFetchAll(() => supabase.from('purchase_invoice_items')
+        .select('quantity, cost_price, price_currency, purchase_invoices!inner(invoice_date, branch_id)')
+        .eq('purchase_invoices.branch_id', br).gte('purchase_invoices.invoice_date', startKey)),
+    ]);
+
+    const costOf = (prod) => {
+      let c = (prod && Number(prod.cost_price)) || 0;
+      if (prod && prod.price_currency === 'usd' && CURRENT_USD_RATE > 0) c *= CURRENT_USD_RATE;
+      return c;
+    };
+    const add = (map, k, v) => { map[k] = (map[k] || 0) + v; };
+
+    // ---- مبيعات وأرباح يومية ----
+    const sTotal = {}, sCost = {}, rValue = {}, rCost = {}, exp = {};
+    salesRows.forEach(r => add(sTotal, chartKeyOf(r.sale_date), Number(r.total) || 0));
+    itemRows.forEach(r => add(sCost, chartKeyOf(r.sales.sale_date), costOf(r.products) * (Number(r.quantity) || 0)));
+    retRows.filter(r => r.type === 'customer').forEach(r => {
+      const k = chartKeyOf(r.return_date);
+      add(rValue, k, (Number(r.unit_price) || 0) * (Number(r.quantity) || 0));
+      add(rCost, k, costOf(r.products) * (Number(r.quantity) || 0));
+    });
+    expRows.forEach(r => add(exp, chartKeyOf(r.expense_date), Number(r.amount) || 0));
+
+    const days = chartDaysBetween(d30, todayStart);
+    const salesVals = days.map(k => (sTotal[k] || 0) - (rValue[k] || 0));
+    const profitVals = days.map(k =>
+      ((sTotal[k] || 0) - (rValue[k] || 0)) - ((sCost[k] || 0) - (rCost[k] || 0)) - (exp[k] || 0));
+
+    // ---- مسار المخزون (رجوعًا من الكمية الحالية) ----
+    const dUnits = {}, dValue = {};
+    itemRows.forEach(r => {
+      const k = chartKeyOf(r.sales.sale_date), q = Number(r.quantity) || 0;
+      add(dUnits, k, -q); add(dValue, k, -q * costOf(r.products));
+    });
+    purRows.forEach(r => {
+      const k = chartKeyOf(r.purchase_invoices.invoice_date), q = Number(r.quantity) || 0;
+      add(dUnits, k, q); add(dValue, k, q * movToSyp(r.cost_price, r.price_currency));
+    });
+    retRows.forEach(r => {
+      const k = chartKeyOf(r.return_date), q = Number(r.quantity) || 0;
+      const sign = r.type === 'supplier' ? -1 : 1;     // مرتجع زبون = رجع للمخزون، مرتجع مورد = طلع منه
+      add(dUnits, k, sign * q); add(dValue, k, sign * q * costOf(r.products));
+    });
+    let curUnits = 0, curValue = 0;
+    (productsCache || []).forEach(p => {
+      const q = Number(p.quantity) || 0;
+      curUnits += q; curValue += q * productCost(p);
+    });
+    const stockDays = chartDaysBetween(stockStart, todayStart);
+    const unitsEnd = new Array(stockDays.length), valueEnd = new Array(stockDays.length);
+    let ru = curUnits, rv = curValue;
+    for (let i = stockDays.length - 1; i >= 0; i--) {
+      unitsEnd[i] = ru; valueEnd[i] = rv;
+      ru -= (dUnits[stockDays[i]] || 0); rv -= (dValue[stockDays[i]] || 0);
+    }
+
+    chartsData = { days, salesVals, profitVals, stockDays, unitsEnd, valueEnd };
+    renderChartsFromData();
+    statusEl.textContent = `آخر تحديث: ${new Date().toLocaleTimeString('ar')}`;
+  } catch (e) {
+    console.error('charts:', e);
+    statusEl.style.color = 'var(--red)';
+    statusEl.textContent = '❌ ' + (e.message || e);
+  }
+}
+
+function renderChartsFromData() {
+  if (!chartsData) return;
+  const { days, salesVals, profitVals, stockDays, unitsEnd, valueEnd } = chartsData;
+  const sum = (a) => a.reduce((s, v) => s + v, 0);
+
+  const totS = sum(salesVals);
+  const bestI = salesVals.indexOf(Math.max(...salesVals));
+  renderBarChart('chart-sales', 'chart-sales-readout', days, salesVals, () => 'ch-bar-sales',
+    `المجموع: <strong>${chartFmtFull(totS)}</strong> ل.س · المتوسط اليومي: <strong>${chartFmtFull(totS / days.length)}</strong>`
+    + (totS > 0 ? ` · أفضل يوم: ${chartDayLabel(days[bestI])} (${chartFmtFull(salesVals[bestI])})` : ''));
+
+  const totP = sum(profitVals);
+  renderBarChart('chart-profit', 'chart-profit-readout', days, profitVals, (v) => v >= 0 ? 'ch-bar-pos' : 'ch-bar-neg',
+    `صافي الربح للفترة: <strong style="color:${totP >= 0 ? 'var(--green)' : 'var(--red)'}">${chartFmtFull(totP)}</strong> ل.س`
+    + ` · أيام بخسارة: ${profitVals.filter(v => v < 0).length}`);
+
+  const isUnits = stockChartMode === 'units';
+  const vals = isUnits ? unitsEnd : valueEnd;
+  const first = vals[0], last = vals[vals.length - 1];
+  const diff = last - first;
+  renderLineChart('chart-stock', 'chart-stock-readout', stockDays, vals, isUnits ? 'قطعة' : 'ل.س',
+    `اليوم: <strong>${chartFmtFull(last)}</strong> ${isUnits ? 'قطعة' : 'ل.س'} · التغيّر منذ 1/9: `
+    + `<strong style="color:${diff >= 0 ? 'var(--green)' : 'var(--red)'}">${diff >= 0 ? '+' : ''}${chartFmtFull(diff)}</strong>`);
+}
+
+document.addEventListener('click', (e) => {
+  const chip = e.target.closest('.stock-chart-chip');
+  if (!chip) return;
+  document.querySelectorAll('.stock-chart-chip').forEach(c => c.classList.remove('active'));
+  chip.classList.add('active');
+  stockChartMode = chip.dataset.m;
+  renderChartsFromData();
+});
+$('#charts-refresh-btn')?.addEventListener('click', loadCharts);
 
 // ---------------- التقرير اليومي (صاحب المحل) ----------------
 function todayLocalDateStr() {
@@ -6999,6 +7339,9 @@ $('#factory-reset-btn').addEventListener('click', async () => {
   reportUnlocked = false;
   $('#report-content').style.display = 'none';
   $('#report-locked-card').style.display = 'block';
+  $('#charts-content').style.display = 'none';
+  $('#charts-locked-card').style.display = 'block';
+  chartsData = null;
   cart = [];
   renderCart();
   await refreshAll();
